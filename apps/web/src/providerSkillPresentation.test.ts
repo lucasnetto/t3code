@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
+import { ProviderDriverKind } from "@t3tools/contracts";
 
 import {
   formatProviderSkillDisplayName,
   formatProviderSkillInstallSource,
+  serializeProviderSkillInvocation,
 } from "./providerSkillPresentation";
 
 describe("formatProviderSkillDisplayName", () => {
@@ -21,6 +23,24 @@ describe("formatProviderSkillDisplayName", () => {
         name: "review-follow-up",
       }),
     ).toBe("Review Follow Up");
+  });
+});
+
+describe("serializeProviderSkillInvocation", () => {
+  it("uses Cursor slash syntax", () => {
+    expect(
+      serializeProviderSkillInvocation(ProviderDriverKind.make("cursor"), {
+        name: "review-follow-up",
+      }),
+    ).toBe("/review-follow-up");
+  });
+
+  it("preserves Codex dollar syntax", () => {
+    expect(
+      serializeProviderSkillInvocation(ProviderDriverKind.make("codex"), {
+        name: "review-follow-up",
+      }),
+    ).toBe("$review-follow-up");
   });
 });
 

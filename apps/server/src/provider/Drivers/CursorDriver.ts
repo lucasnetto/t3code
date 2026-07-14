@@ -40,6 +40,7 @@ import {
 } from "../ProviderDriver.ts";
 import type { ServerProviderDraft } from "../providerSnapshot.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
+import { discoverCursorSkills, resolveCursorSkillHomeDirectory } from "../cursorSkillDiscovery.ts";
 import {
   makeProviderMaintenanceCapabilities,
   makeStaticProviderMaintenanceResolver,
@@ -104,6 +105,7 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const httpClient = yield* HttpClient.HttpClient;
+      const serverConfig = yield* ServerConfig;
       const serverSettings = yield* ServerSettingsService;
       const eventLoggers = yield* ProviderEventLoggers;
       const processEnv = mergeProviderInstanceEnvironment(environment);
@@ -130,7 +132,9 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
       });
       const textGeneration = yield* makeCursorTextGeneration(effectiveConfig, processEnv);
 
-      const checkProvider = checkCursorProviderStatus(effectiveConfig, processEnv).pipe(
+      const checkProvider = checkCursorProviderStatus(effectiveConfig, processEnv, {
+        cwd: serverConfig.cwd,
+      }).pipe(
         Effect.map(stampIdentity),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -138,13 +142,25 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
       );
 
       const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, serverSettings);
+      const discoverSkills = discoverCursorSkills({
+        cwd: serverConfig.cwd,
+        homeDirectory: resolveCursorSkillHomeDirectory(processEnv),
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+      );
       const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<CursorSettings>>({
         maintenanceCapabilities,
         getSettings: snapshotSettings.getSettings,
         streamSettings: snapshotSettings.streamSettings,
         haveSettingsChanged: haveProviderSnapshotSettingsChanged,
         initialSnapshot: (settings) =>
-          buildInitialCursorProviderSnapshot(settings.provider).pipe(Effect.map(stampIdentity)),
+          discoverSkills.pipe(
+            Effect.flatMap((skills) =>
+              buildInitialCursorProviderSnapshot(settings.provider, skills),
+            ),
+            Effect.map(stampIdentity),
+          ),
         checkProvider,
         // Model catalog and capabilities come exclusively from Cursor's
         // list_available_models extension method during provider checks.

@@ -445,6 +445,62 @@ describe("checkCursorProviderStatus", () => {
     });
   });
 
+  it("includes discovered skills even when the Cursor CLI is unavailable", async () => {
+    const provider = await runNode(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectory({
+          directory: NodeOS.tmpdir(),
+          prefix: "cursor-provider-skills-",
+        });
+        const homeDirectory = path.join(root, "home");
+        const cwd = path.join(root, "project");
+        const skillPath = path.join(
+          homeDirectory,
+          ".agents",
+          "skills",
+          "manual-review",
+          "SKILL.md",
+        );
+        yield* fs.makeDirectory(path.dirname(skillPath), { recursive: true });
+        yield* fs.writeFileString(
+          skillPath,
+          [
+            "---",
+            "name: manual-review",
+            "description: Review changes on demand",
+            "disable-model-invocation: true",
+            "---",
+            "",
+            "# Manual Review",
+          ].join("\n"),
+        );
+
+        const snapshot = yield* checkCursorProviderStatus(
+          {
+            enabled: true,
+            binaryPath: missingCursorBinaryPath,
+            apiEndpoint: "",
+            customModels: [],
+          },
+          undefined,
+          { cwd, homeDirectory },
+        );
+        yield* fs.remove(root, { recursive: true, force: true });
+        return snapshot;
+      }),
+    );
+
+    expect(provider.skills).toEqual([
+      expect.objectContaining({
+        name: "manual-review",
+        scope: "user",
+        enabled: true,
+      }),
+    ]);
+  });
+
   it("passes the injected environment to ACP model discovery", async () => {
     const { requestLogPath, wrapperPath } = await runNode(makeProviderStatusEnvFixture());
 

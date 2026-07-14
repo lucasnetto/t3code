@@ -55,3 +55,10 @@ agents.
   examples of idiomatic usage, tests, module structure, and API design.
 - When writing relay infrastructure code with Alchemy, inspect `.repos/alchemy-effect/` for examples of
   idiomatic usage, tests, module structure, and API design.
+
+## After completing a task
+
+- This repository is a fork. Document each distinct fork-specific change in its own Markdown file under
+  `fork-changes/`.
+- Use a descriptive kebab-case filename, for example `fork-changes/cursor-agent-skill-discovery.md`.
+- When extending an existing fork change, update its current file instead of creating a duplicate entry.

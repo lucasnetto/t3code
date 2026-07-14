@@ -121,7 +121,10 @@ import {
   deriveLatestContextWindowSnapshot,
   formatProviderDisplayName,
 } from "../../lib/contextWindow";
-import { formatProviderSkillDisplayName } from "../../providerSkillPresentation";
+import {
+  formatProviderSkillDisplayName,
+  serializeProviderSkillInvocation,
+} from "../../providerSkillPresentation";
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import type { ReviewCommentContext } from "../../reviewCommentContext";
@@ -982,8 +985,28 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           description: command.description ?? command.input?.hint ?? "Run provider command",
         }),
       );
+      const cursorSkillItems =
+        selectedProvider === "cursor"
+          ? searchProviderSkills(selectedProviderStatus?.skills ?? [], composerTrigger.query).map(
+              (skill) => ({
+                id: `skill:${selectedProvider}:${skill.name}`,
+                type: "skill" as const,
+                provider: selectedProvider,
+                skill,
+                label: `/${skill.name}`,
+                description:
+                  skill.shortDescription ??
+                  skill.description ??
+                  (skill.scope ? `${skill.scope} skill` : "Run provider skill"),
+              }),
+            )
+          : [];
       const query = composerTrigger.query.trim().toLowerCase();
-      const slashCommandItems = [...builtInSlashCommandItems, ...providerSlashCommandItems];
+      const slashCommandItems = [
+        ...builtInSlashCommandItems,
+        ...providerSlashCommandItems,
+        ...cursorSkillItems,
+      ];
       if (!query) {
         return slashCommandItems;
       }
@@ -1612,7 +1635,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         return;
       }
       if (item.type === "skill") {
-        const replacement = `$${item.skill.name} `;
+        const replacement = `${serializeProviderSkillInvocation(item.provider, item.skill)} `;
         const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
           snapshot.value,
           trigger.rangeEnd,
@@ -2415,7 +2438,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                             )}`
                           : phase === "disconnected"
                             ? "Ask for follow-up changes or attach images"
-                            : "Ask anything, @tag files/folders, $use skills, or / for commands"
+                            : selectedProvider === "cursor"
+                              ? "Ask anything, @tag files/folders, or / for commands and skills"
+                              : "Ask anything, @tag files/folders, $use skills, or / for commands"
                 }
                 disabled={
                   isConnecting ||

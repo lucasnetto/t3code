@@ -1,4 +1,4 @@
-import type { ServerProviderSkill } from "@t3tools/contracts";
+import type { ProviderDriverKind, ServerProviderSkill } from "@t3tools/contracts";
 
 function titleCaseWords(value: string): string {
   const words: string[] = [];
@@ -21,6 +21,13 @@ export function formatProviderSkillDisplayName(
     return displayName;
   }
   return titleCaseWords(skill.name);
+}
+
+export function serializeProviderSkillInvocation(
+  provider: ProviderDriverKind,
+  skill: Pick<ServerProviderSkill, "name">,
+): string {
+  return `${provider === "cursor" ? "/" : "$"}${skill.name}`;
 }
 
 export function formatProviderSkillInstallSource(

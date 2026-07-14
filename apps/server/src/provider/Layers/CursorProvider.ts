@@ -6,6 +6,7 @@ import type {
   ServerProvider,
   ServerProviderAuth,
   ServerProviderModel,
+  ServerProviderSkill,
   ServerProviderState,
 } from "@t3tools/contracts";
 import { ProviderDriverKind } from "@t3tools/contracts";
@@ -46,6 +47,7 @@ import {
 } from "../providerMaintenance.ts";
 import * as AcpSessionRuntime from "../acp/AcpSessionRuntime.ts";
 import { CursorListAvailableModelsResponse } from "../acp/CursorAcpExtension.ts";
+import { discoverCursorSkills, resolveCursorSkillHomeDirectory } from "../cursorSkillDiscovery.ts";
 
 const decodeCursorListAvailableModelsResponse = Schema.decodeUnknownEffect(
   CursorListAvailableModelsResponse,
@@ -77,6 +79,7 @@ export const CURSOR_PARAMETERIZED_MODEL_PICKER_CAPABILITIES = {
 
 export function buildInitialCursorProviderSnapshot(
   cursorSettings: CursorSettings,
+  skills: ReadonlyArray<ServerProviderSkill> = [],
 ): Effect.Effect<ServerProviderDraft> {
   return Effect.gen(function* () {
     const checkedAt = yield* Effect.map(DateTime.now, DateTime.formatIso);
@@ -88,6 +91,7 @@ export function buildInitialCursorProviderSnapshot(
         enabled: false,
         checkedAt,
         models,
+        skills,
         probe: {
           installed: false,
           version: null,
@@ -103,6 +107,7 @@ export function buildInitialCursorProviderSnapshot(
       enabled: true,
       checkedAt,
       models,
+      skills,
       probe: {
         installed: true,
         version: null,
@@ -628,6 +633,7 @@ export function buildCursorProviderSnapshot(input: {
   readonly cursorSettings: CursorSettings;
   readonly parsed: CursorAboutResult;
   readonly discoveredModels?: ReadonlyArray<ServerProviderModel>;
+  readonly skills?: ReadonlyArray<ServerProviderSkill>;
   readonly discoveryWarning?: string;
 }): ServerProviderDraft {
   const message = joinProviderMessages(input.parsed.message, input.discoveryWarning);
@@ -641,6 +647,7 @@ export function buildCursorProviderSnapshot(input: {
       input.cursorSettings.customModels,
       EMPTY_CAPABILITIES,
     ),
+    skills: input.skills ?? [],
     probe: {
       installed: true,
       version: input.parsed.version,
@@ -989,6 +996,10 @@ const runCursorAboutCommand = (cursorSettings: CursorSettings, environment?: Nod
 export const checkCursorProviderStatus = Effect.fn("checkCursorProviderStatus")(function* (
   cursorSettings: CursorSettings,
   environment?: NodeJS.ProcessEnv,
+  discoveryContext?: {
+    readonly cwd?: string;
+    readonly homeDirectory?: string;
+  },
 ): Effect.fn.Return<
   ServerProviderDraft,
   never,
@@ -996,6 +1007,10 @@ export const checkCursorProviderStatus = Effect.fn("checkCursorProviderStatus")(
 > {
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const fallbackModels = getCursorFallbackModels(cursorSettings);
+  const skills = yield* discoverCursorSkills({
+    cwd: discoveryContext?.cwd ?? process.cwd(),
+    homeDirectory: discoveryContext?.homeDirectory ?? resolveCursorSkillHomeDirectory(environment),
+  });
 
   if (!cursorSettings.enabled) {
     return buildServerProvider({
@@ -1003,6 +1018,7 @@ export const checkCursorProviderStatus = Effect.fn("checkCursorProviderStatus")(
       enabled: false,
       checkedAt,
       models: fallbackModels,
+      skills,
       probe: {
         installed: false,
         version: null,
@@ -1029,6 +1045,7 @@ export const checkCursorProviderStatus = Effect.fn("checkCursorProviderStatus")(
       enabled: cursorSettings.enabled,
       checkedAt,
       models: fallbackModels,
+      skills,
       probe: {
         installed: !isCommandMissingCause(error),
         version: null,
@@ -1047,6 +1064,7 @@ export const checkCursorProviderStatus = Effect.fn("checkCursorProviderStatus")(
       enabled: cursorSettings.enabled,
       checkedAt,
       models: fallbackModels,
+      skills,
       probe: {
         installed: true,
         version: null,
@@ -1070,6 +1088,7 @@ export const checkCursorProviderStatus = Effect.fn("checkCursorProviderStatus")(
       enabled: cursorSettings.enabled,
       checkedAt,
       models: fallbackModels,
+      skills,
       probe: {
         installed: true,
         version: parsed.version,
@@ -1111,6 +1130,7 @@ export const checkCursorProviderStatus = Effect.fn("checkCursorProviderStatus")(
       Option.filter(discoveredModels, (models) => models.length > 0),
       () => [] as const,
     ),
+    skills,
     ...(discoveryWarning ? { discoveryWarning } : {}),
   });
 });

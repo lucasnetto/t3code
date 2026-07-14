@@ -6,6 +6,7 @@ import { searchSlashCommandItems } from "./composerSlashCommandSearch";
 
 describe("searchSlashCommandItems", () => {
   const claudeDriver = ProviderDriverKind.make("claudeAgent");
+  const cursorDriver = ProviderDriverKind.make("cursor");
 
   it("moves exact provider command matches ahead of broader description matches", () => {
     const items = [
@@ -66,6 +67,36 @@ describe("searchSlashCommandItems", () => {
 
     expect(searchSlashCommandItems(items, "gfc").map((item) => item.id)).toEqual([
       "provider-slash-command:claudeAgent:gh-fix-ci",
+    ]);
+  });
+
+  it("ranks Cursor skills by their slash invocation name", () => {
+    const items = [
+      {
+        id: "slash:default",
+        type: "slash-command",
+        command: "default",
+        label: "/default",
+        description: "Switch this thread back to normal build mode",
+      },
+      {
+        id: "skill:cursor:gh-fix-ci",
+        type: "skill",
+        provider: cursorDriver,
+        skill: {
+          name: "gh-fix-ci",
+          path: "/tmp/gh-fix-ci/SKILL.md",
+          enabled: true,
+        },
+        label: "/gh-fix-ci",
+        description: "Fix failing GitHub Actions",
+      },
+    ] satisfies Array<
+      Extract<ComposerCommandItem, { type: "slash-command" | "provider-slash-command" | "skill" }>
+    >;
+
+    expect(searchSlashCommandItems(items, "gfc").map((item) => item.id)).toEqual([
+      "skill:cursor:gh-fix-ci",
     ]);
   });
 });
