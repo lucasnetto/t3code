@@ -1,14 +1,23 @@
 import { parsePatchFiles } from "@pierre/diffs/utils/parsePatchFiles";
 import type { FileDiffMetadata } from "@pierre/diffs/types";
+import { MIDNIGHT_BLUEPRINT_THEME, type ThemePreference } from "./themePreferences";
+import { MIDNIGHT_BLUEPRINT_DIFF_THEME_NAME } from "../themes/midnightBlueprint";
 
 export const DIFF_THEME_NAMES = {
   light: "pierre-light",
   dark: "pierre-dark",
+  midnightBlueprint: MIDNIGHT_BLUEPRINT_DIFF_THEME_NAME,
 } as const;
 
 export type DiffThemeName = (typeof DIFF_THEME_NAMES)[keyof typeof DIFF_THEME_NAMES];
 
-export function resolveDiffThemeName(theme: "light" | "dark"): DiffThemeName {
+export function resolveDiffThemeName(
+  theme: "light" | "dark",
+  preference?: ThemePreference,
+): DiffThemeName {
+  if (preference === MIDNIGHT_BLUEPRINT_THEME) {
+    return DIFF_THEME_NAMES.midnightBlueprint;
+  }
   return theme === "dark" ? DIFF_THEME_NAMES.dark : DIFF_THEME_NAMES.light;
 }
 

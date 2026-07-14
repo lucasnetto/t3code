@@ -285,6 +285,40 @@
   }
 }
 
+:root.theme-midnight-blueprint {
+  color-scheme: dark;
+  --background: #1a2138;
+  --app-chrome-background: #151a30;
+  --foreground: #f0f1f4;
+  --card: #222b45;
+  --card-foreground: #f0f1f4;
+  --popover: #222b45;
+  --popover-foreground: #f0f1f4;
+  --primary: #0057c2;
+  --primary-foreground: #ffffff;
+  --secondary: #2e3a59;
+  --secondary-foreground: #f7f9fc;
+  --muted: #2e3a59;
+  --muted-foreground: #8f9bb3;
+  --accent: #2e3a59;
+  --accent-foreground: #f7f9fc;
+  --destructive: #e75d5c;
+  --destructive-foreground: #ff708d;
+  --border: #242831;
+  --input: #2e3a59;
+  --ring: #4aa5f0;
+  --info: #4aa5f0;
+  --info-foreground: #9cdcfe;
+  --success: #00b383;
+  --success-foreground: #4ec9b0;
+  --warning: #ffaa00;
+  --warning-foreground: #ffecb3;
+}
+
+:root.theme-midnight-blueprint ::selection {
+  background: #4675b37a;
+}
+
 body {
   font-family:
     "DM Sans Variable",

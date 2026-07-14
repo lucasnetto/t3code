@@ -27,6 +27,24 @@ afterEach(() => {
 });
 
 describe("theme failure handling", () => {
+  it("reads Midnight Blueprint as a persisted preference", async () => {
+    const localStorage = createStorage();
+    localStorage.setItem("t3code:theme", "midnight-blueprint");
+    vi.stubGlobal("window", {
+      localStorage,
+      matchMedia: () => ({ matches: false }),
+    });
+    vi.stubGlobal("document", {
+      documentElement: {
+        classList: { toggle: vi.fn() },
+      },
+    });
+
+    const { readThemePreference } = await import("./useTheme");
+
+    expect(readThemePreference()).toBe("midnight-blueprint");
+  });
+
   it("preserves exact storage causes and operation context", async () => {
     const readCause = new Error("storage read blocked");
     const writeCause = new Error("storage quota exceeded");
@@ -189,5 +207,15 @@ describe("theme failure handling", () => {
       expect(attributes).not.toHaveProperty("cause");
       expect(JSON.stringify(attributes)).not.toContain(cause.message);
     }
+  });
+
+  it("syncs Midnight Blueprint as dark to the desktop shell", async () => {
+    const setTheme = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("window", { desktopBridge: { setTheme } });
+
+    const { syncDesktopThemePreference } = await import("./useTheme");
+    await syncDesktopThemePreference({ setTheme }, "midnight-blueprint");
+
+    expect(setTheme).toHaveBeenCalledWith("dark");
   });
 });

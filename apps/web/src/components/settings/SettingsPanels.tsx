@@ -88,21 +88,7 @@ import {
 } from "./settingsLayout";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { useAtomCommand } from "../../state/use-atom-command";
-
-const THEME_OPTIONS = [
-  {
-    value: "system",
-    label: "System",
-  },
-  {
-    value: "light",
-    label: "Light",
-  },
-  {
-    value: "dark",
-    label: "Dark",
-  },
-] as const;
+import { isThemePreference, THEME_OPTIONS } from "../../lib/themePreferences";
 
 const TIMESTAMP_FORMAT_LABELS = {
   locale: "System default",
@@ -528,7 +514,7 @@ export function GeneralSettingsPanel() {
             <Select
               value={theme}
               onValueChange={(value) => {
-                if (value === "system" || value === "light" || value === "dark") {
+                if (isThemePreference(value)) {
                   setTheme(value);
                 }
               }}

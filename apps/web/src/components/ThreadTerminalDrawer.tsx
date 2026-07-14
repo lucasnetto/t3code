@@ -125,6 +125,9 @@ function normalizeComputedColor(value: string | null | undefined, fallback: stri
 
 function terminalThemeFromApp(mountElement?: HTMLElement | null): ITheme {
   const isDark = document.documentElement.classList.contains("dark");
+  const isMidnightBlueprint = document.documentElement.classList.contains(
+    "theme-midnight-blueprint",
+  );
   const fallbackBackground = isDark ? "rgb(14, 18, 24)" : "rgb(255, 255, 255)";
   const fallbackForeground = isDark ? "rgb(237, 241, 247)" : "rgb(28, 33, 41)";
   const drawerSurface =
@@ -141,6 +144,35 @@ function terminalThemeFromApp(mountElement?: HTMLElement | null): ITheme {
     drawerStyles.color,
     normalizeComputedColor(bodyStyles.color, fallbackForeground),
   );
+
+  if (isMidnightBlueprint) {
+    return {
+      background,
+      foreground,
+      cursor: "#ffffff",
+      cursorAccent: "#151a30",
+      selectionBackground: "#4675b37a",
+      scrollbarSliderBackground: "#2e3a59",
+      scrollbarSliderHoverBackground: "#656a77",
+      scrollbarSliderActiveBackground: "#90959e",
+      black: "#151a30",
+      red: "#e75d5c",
+      green: "#00b383",
+      yellow: "#ffaa00",
+      blue: "#4aa5f0",
+      magenta: "#c084fc",
+      cyan: "#2bbac5",
+      white: "#c5cee0",
+      brightBlack: "#6e7b8b",
+      brightRed: "#ff708d",
+      brightGreen: "#aeea00",
+      brightYellow: "#ffecb3",
+      brightBlue: "#9cdcfe",
+      brightMagenta: "#c084fc",
+      brightCyan: "#4ec9b0",
+      brightWhite: "#ffffff",
+    };
+  }
 
   if (isDark) {
     return {

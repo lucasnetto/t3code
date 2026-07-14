@@ -35,8 +35,8 @@ import { type TurnDiffSummary } from "../../types";
 import { summarizeTurnDiffStats } from "../../lib/turnDiffTree";
 import {
   getRenderablePatch,
-  resolveDiffThemeName,
   resolveFileDiffPath,
+  type DiffThemeName,
 } from "../../lib/diffRendering";
 import ChatMarkdown from "../ChatMarkdown";
 import {
@@ -126,6 +126,7 @@ interface TimelineRowSharedState {
   threadRef: ScopedThreadRef | null;
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
+  diffThemeName: DiffThemeName;
   workspaceRoot: string | undefined;
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   activeThreadEnvironmentId: EnvironmentId;
@@ -170,6 +171,7 @@ interface MessagesTimelineProps {
   activeThreadEnvironmentId: EnvironmentId;
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
+  diffThemeName: DiffThemeName;
   timestampFormat: TimestampFormat;
   workspaceRoot: string | undefined;
   skills?: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
@@ -203,6 +205,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   activeThreadEnvironmentId,
   markdownCwd,
   resolvedTheme,
+  diffThemeName,
   timestampFormat,
   workspaceRoot,
   skills = EMPTY_TIMELINE_SKILLS,
@@ -413,6 +416,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       threadRef: parseScopedThreadKey(routeThreadKey),
       markdownCwd,
       resolvedTheme,
+      diffThemeName,
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
@@ -427,6 +431,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       routeThreadKey,
       markdownCwd,
       resolvedTheme,
+      diffThemeName,
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
@@ -1661,7 +1666,7 @@ function UserMessageReviewCommentCard({ comment }: { comment: ReviewCommentConte
             options={{
               collapsed: false,
               diffStyle: "unified",
-              theme: resolveDiffThemeName(ctx.resolvedTheme),
+              theme: ctx.diffThemeName,
             }}
           />
         ))}

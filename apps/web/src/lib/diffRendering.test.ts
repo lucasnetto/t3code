@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
-import { buildPatchCacheKey, getRenderablePatch } from "./diffRendering";
+import { buildPatchCacheKey, getRenderablePatch, resolveDiffThemeName } from "./diffRendering";
+
+describe("resolveDiffThemeName", () => {
+  it("selects the custom syntax theme for Midnight Blueprint", () => {
+    expect(resolveDiffThemeName("dark", "midnight-blueprint")).toBe("midnight-blueprint");
+    expect(resolveDiffThemeName("dark", "dark")).toBe("pierre-dark");
+  });
+});
 
 describe("buildPatchCacheKey", () => {
   it("returns a stable cache key for identical content", () => {
