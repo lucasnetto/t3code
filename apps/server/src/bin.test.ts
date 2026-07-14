@@ -57,7 +57,7 @@ const captureStdout = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
 
 const makeCliTestServerConfig = (baseDir: string) =>
   Effect.gen(function* () {
-    const derivedPaths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
+    const derivedPaths = yield* ServerConfig.deriveServerPaths(baseDir);
     return {
       logLevel: "Info",
       traceMinLevel: "Info",
@@ -241,7 +241,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
       const baseDir = NodeFS.mkdtempSync(
         NodePath.join(NodeOS.tmpdir(), "t3-cli-cloud-login-test-"),
       );
-      const { secretsDir } = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
+      const { secretsDir } = yield* ServerConfig.deriveServerPaths(baseDir);
       NodeFS.mkdirSync(secretsDir, { recursive: true });
       NodeFS.writeFileSync(
         NodePath.join(secretsDir, "cloud-cli-oauth-token.bin"),
@@ -289,7 +289,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
       const baseDir = NodeFS.mkdtempSync(
         NodePath.join(NodeOS.tmpdir(), "t3-cli-cloud-logout-test-"),
       );
-      const { secretsDir } = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
+      const { secretsDir } = yield* ServerConfig.deriveServerPaths(baseDir);
       const tokenPath = NodePath.join(secretsDir, "cloud-cli-oauth-token.bin");
       NodeFS.mkdirSync(secretsDir, { recursive: true });
       NodeFS.writeFileSync(tokenPath, "invalid persisted token");

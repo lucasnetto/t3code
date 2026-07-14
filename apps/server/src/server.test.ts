@@ -353,8 +353,7 @@ const buildAppUnderTest = (options?: {
     const fileSystem = yield* FileSystem.FileSystem;
     const tempBaseDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-router-test-" });
     const baseDir = options?.config?.baseDir ?? tempBaseDir;
-    const devUrl = options?.config?.devUrl;
-    const derivedPaths = yield* ServerConfig.deriveServerPaths(baseDir, devUrl);
+    const derivedPaths = yield* ServerConfig.deriveServerPaths(baseDir);
     const config: ServerConfig.ServerConfig["Service"] = {
       logLevel: "Info",
       traceMinLevel: "Info",
@@ -373,7 +372,7 @@ const buildAppUnderTest = (options?: {
       baseDir,
       ...derivedPaths,
       staticDir: undefined,
-      devUrl,
+      devUrl: options?.config?.devUrl,
       noBrowser: true,
       startupPresentation: "browser",
       desktopBootstrapToken: defaultDesktopBootstrapToken,

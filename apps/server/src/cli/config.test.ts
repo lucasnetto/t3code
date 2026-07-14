@@ -60,7 +60,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     Effect.gen(function* () {
       const { join } = yield* Path.Path;
       const baseDir = join(NodeOS.tmpdir(), "t3-cli-config-env-base");
-      const derivedPaths = yield* deriveServerPaths(baseDir, new URL("http://127.0.0.1:5173"));
+      const derivedPaths = yield* deriveServerPaths(baseDir);
       const resolved = yield* resolveServerConfig(
         {
           mode: Option.none(),
@@ -119,6 +119,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         tailscaleServeEnabled: false,
         tailscaleServePort: 443,
       });
+      assert.equal(resolved.stateDir, join(baseDir, "userdata"));
     }),
   );
 
@@ -126,7 +127,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     Effect.gen(function* () {
       const { join } = yield* Path.Path;
       const baseDir = join(NodeOS.tmpdir(), "t3-cli-config-flags-base");
-      const derivedPaths = yield* deriveServerPaths(baseDir, new URL("http://127.0.0.1:4173"));
+      const derivedPaths = yield* deriveServerPaths(baseDir);
       const resolved = yield* resolveServerConfig(
         {
           mode: Option.some("web"),
@@ -199,7 +200,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           tailscaleServePort: 443,
         }),
       );
-      const derivedPaths = yield* deriveServerPaths(baseDir, new URL("http://127.0.0.1:4173"));
+      const derivedPaths = yield* deriveServerPaths(baseDir);
 
       const resolved = yield* resolveServerConfig(
         {
@@ -274,7 +275,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           otlpMetricsUrl: "http://localhost:4318/v1/metrics",
         }),
       );
-      const derivedPaths = yield* deriveServerPaths(baseDir, undefined);
+      const derivedPaths = yield* deriveServerPaths(baseDir);
 
       const resolved = yield* resolveServerConfig(
         {
@@ -396,7 +397,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           tailscaleServePort: 443,
         }),
       );
-      const derivedPaths = yield* deriveServerPaths(baseDir, new URL("http://127.0.0.1:4173"));
+      const derivedPaths = yield* deriveServerPaths(baseDir);
 
       const resolved = yield* resolveServerConfig(
         {
@@ -461,7 +462,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-cli-config-settings-" });
-      const derivedPaths = yield* deriveServerPaths(baseDir, undefined);
+      const derivedPaths = yield* deriveServerPaths(baseDir);
       yield* fs.makeDirectory(path.dirname(derivedPaths.settingsPath), { recursive: true });
       yield* fs.writeFileString(
         derivedPaths.settingsPath,
@@ -529,7 +530,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     Effect.gen(function* () {
       const { join } = yield* Path.Path;
       const baseDir = join(NodeOS.tmpdir(), "t3-cli-config-headless-base");
-      const derivedPaths = yield* deriveServerPaths(baseDir, undefined);
+      const derivedPaths = yield* deriveServerPaths(baseDir);
 
       const resolved = yield* resolveServerConfig(
         {
