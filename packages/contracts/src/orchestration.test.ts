@@ -247,6 +247,30 @@ it.effect("preserves explicit provider and runtime mode in thread.turn.start", (
   }),
 );
 
+it.effect("accepts Cursor SDK auto-review in thread.turn.start", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeThreadTurnStartCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-turn-auto-review",
+      threadId: "thread-1",
+      message: {
+        messageId: "msg-auto-review",
+        role: "user",
+        text: "hello",
+        attachments: [],
+      },
+      modelSelection: {
+        instanceId: "cursorSdk",
+        model: "auto",
+      },
+      runtimeMode: "auto-review",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.strictEqual(parsed.runtimeMode, "auto-review");
+  }),
+);
+
 it.effect("accepts bootstrap metadata in thread.turn.start", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadTurnStartCommand({

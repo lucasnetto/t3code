@@ -15,6 +15,7 @@ import {
   MessageId,
   ThreadId,
 } from "@t3tools/contracts";
+import { normalizeRuntimeMode } from "@t3tools/client-runtime/runtime-modes";
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
 
@@ -399,9 +400,10 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       }
       updateComposerDraftSettings(selectedProjectDraftKey, {
         modelSelection: option.selection,
+        runtimeMode: normalizeRuntimeMode(runtimeMode, option.supportedRuntimeModes),
       });
     },
-    [modelOptions, selectedProjectDraftKey],
+    [modelOptions, runtimeMode, selectedProjectDraftKey],
   );
   const setSelectedModelOptions = useCallback(
     (options: ReadonlyArray<ProviderOptionSelection> | undefined) => {

@@ -12,11 +12,14 @@ describe("composerRuntimeModes", () => {
     expect(getSupportedRuntimeModes({})).toEqual(ALL_RUNTIME_MODES);
   });
 
-  it("limits Cursor SDK sessions to full access", () => {
-    const supported = getSupportedRuntimeModes({ supportedRuntimeModes: ["full-access"] });
+  it("limits Cursor SDK sessions to auto-review and full access", () => {
+    const supported = getSupportedRuntimeModes({
+      supportedRuntimeModes: ["auto-review", "full-access"],
+    });
 
-    expect(supported).toEqual(["full-access"]);
-    expect(normalizeRuntimeMode("approval-required", supported)).toBe("full-access");
+    expect(supported).toEqual(["auto-review", "full-access"]);
+    expect(normalizeRuntimeMode("approval-required", supported)).toBe("auto-review");
+    expect(normalizeRuntimeMode("auto-review", supported)).toBe("auto-review");
     expect(normalizeRuntimeMode("full-access", supported)).toBe("full-access");
   });
 });

@@ -102,6 +102,7 @@ describe("buildTurnStartParams", () => {
     NodeAssert.deepStrictEqual(params, {
       threadId: "provider-thread-1",
       approvalPolicy: "never",
+      approvalsReviewer: "user",
       sandboxPolicy: {
         type: "dangerFullAccess",
       },
@@ -144,6 +145,7 @@ describe("buildTurnStartParams", () => {
     NodeAssert.deepStrictEqual(params, {
       threadId: "provider-thread-1",
       approvalPolicy: "on-request",
+      approvalsReviewer: "user",
       sandboxPolicy: {
         type: "workspaceWrite",
       },
@@ -181,6 +183,7 @@ describe("buildTurnStartParams", () => {
     NodeAssert.deepStrictEqual(params, {
       threadId: "provider-thread-1",
       approvalPolicy: "untrusted",
+      approvalsReviewer: "user",
       sandboxPolicy: {
         type: "readOnly",
       },
@@ -191,6 +194,20 @@ describe("buildTurnStartParams", () => {
         },
       ],
     });
+  });
+
+  it("routes auto-review approvals to Codex's reviewer", () => {
+    const params = Effect.runSync(
+      buildTurnStartParams({
+        threadId: "provider-thread-1",
+        runtimeMode: "auto-review",
+        prompt: "Review",
+      }),
+    );
+
+    NodeAssert.equal(params.approvalPolicy, "on-request");
+    NodeAssert.equal(params.approvalsReviewer, "auto_review");
+    NodeAssert.deepStrictEqual(params.sandboxPolicy, { type: "workspaceWrite" });
   });
 });
 
@@ -292,7 +309,7 @@ describe("openCodexThread", () => {
       const opened = yield* openCodexThread({
         client,
         threadId: ThreadId.make("thread-1"),
-        runtimeMode: "full-access",
+        runtimeMode: "auto-review",
         cwd: "/tmp/project",
         requestedModel: "gpt-5.3-codex",
         serviceTier: undefined,
@@ -304,6 +321,16 @@ describe("openCodexThread", () => {
         calls.map((call) => call.method),
         ["thread/resume", "thread/start"],
       );
+      for (const call of calls) {
+        NodeAssert.deepStrictEqual(call.payload, {
+          ...(call.method === "thread/resume" ? { threadId: "stale-thread" } : {}),
+          cwd: "/tmp/project",
+          approvalPolicy: "on-request",
+          approvalsReviewer: "auto_review",
+          sandbox: "workspace-write",
+          model: "gpt-5.3-codex",
+        });
+      }
     }),
   );
 

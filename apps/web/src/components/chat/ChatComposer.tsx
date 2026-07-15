@@ -22,6 +22,7 @@ import {
   connectionStatusText,
   type EnvironmentConnectionPresentation,
 } from "@t3tools/client-runtime/connection";
+import { RUNTIME_MODE_PRESENTATION } from "@t3tools/client-runtime/runtime-modes";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
 import { createModelSelection, normalizeModelSlug } from "@t3tools/shared/model";
 import {
@@ -102,6 +103,7 @@ import {
   LockIcon,
   LockOpenIcon,
   PenLineIcon,
+  ShieldCheckIcon,
   XIcon,
 } from "lucide-react";
 import { proposedPlanTitle } from "../../proposedPlan";
@@ -132,25 +134,11 @@ import type { ReviewCommentContext } from "../../reviewCommentContext";
 
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
 
-const runtimeModeConfig: Record<
-  RuntimeMode,
-  { label: string; description: string; icon: LucideIcon }
-> = {
-  "approval-required": {
-    label: "Supervised",
-    description: "Ask before commands and file changes.",
-    icon: LockIcon,
-  },
-  "auto-accept-edits": {
-    label: "Auto-accept edits",
-    description: "Auto-approve edits, ask before other actions.",
-    icon: PenLineIcon,
-  },
-  "full-access": {
-    label: "Full access",
-    description: "Allow commands and edits without prompts.",
-    icon: LockOpenIcon,
-  },
+const runtimeModeIcons: Record<RuntimeMode, LucideIcon> = {
+  "approval-required": LockIcon,
+  "auto-accept-edits": PenLineIcon,
+  "auto-review": ShieldCheckIcon,
+  "full-access": LockOpenIcon,
 };
 
 const COMPOSER_FLOATING_LAYER_SELECTOR = [
@@ -205,8 +193,8 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
   onRuntimeModeChange: (mode: RuntimeMode) => void;
   onTogglePlanSidebar: () => void;
 }) {
-  const runtimeModeOption = runtimeModeConfig[props.runtimeMode];
-  const RuntimeModeIcon = runtimeModeOption.icon;
+  const runtimeModeOption = RUNTIME_MODE_PRESENTATION[props.runtimeMode];
+  const RuntimeModeIcon = runtimeModeIcons[props.runtimeMode];
   const interactionModeTooltip =
     props.interactionMode === "plan"
       ? "Plan mode — click to return to normal build mode"
@@ -274,8 +262,8 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
           </TooltipTrigger>
           <SelectPopup alignItemWithTrigger={false}>
             {props.supportedRuntimeModes.map((mode) => {
-              const option = runtimeModeConfig[mode];
-              const OptionIcon = option.icon;
+              const option = RUNTIME_MODE_PRESENTATION[mode];
+              const OptionIcon = runtimeModeIcons[mode];
               return (
                 <SelectItem key={mode} value={mode} className="min-w-64 py-2">
                   <div className="grid min-w-0 gap-0.5">

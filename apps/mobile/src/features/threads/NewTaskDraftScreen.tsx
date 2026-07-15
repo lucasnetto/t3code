@@ -12,6 +12,10 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
+import {
+  ALL_RUNTIME_MODES,
+  RUNTIME_MODE_PRESENTATION,
+} from "@t3tools/client-runtime/runtime-modes";
 
 import { ComposerEditor, type ComposerEditorHandle } from "../../components/ComposerEditor";
 import {
@@ -261,6 +265,8 @@ export function NewTaskDraftScreen(props: {
       }),
     [flow.selectedModel?.options, flow.selectedModelOption?.capabilities],
   );
+  const supportedRuntimeModes =
+    flow.selectedModelOption?.supportedRuntimeModes ?? ALL_RUNTIME_MODES;
 
   const optionsMenuActions = useMemo(
     () => [
@@ -268,21 +274,11 @@ export function NewTaskDraftScreen(props: {
       {
         id: "options-runtime",
         title: "Runtime",
-        subtitle:
-          flow.runtimeMode === "approval-required"
-            ? "Approve actions"
-            : flow.runtimeMode === "auto-accept-edits"
-              ? "Auto-accept edits"
-              : "Full access",
-        subactions: [
-          { id: "options:runtime:approval-required", title: "Approve actions" },
-          { id: "options:runtime:auto-accept-edits", title: "Auto-accept edits" },
-          { id: "options:runtime:full-access", title: "Full access" },
-        ].map((option) => {
-          const value = option.id.replace("options:runtime:", "");
+        subtitle: RUNTIME_MODE_PRESENTATION[flow.runtimeMode].label,
+        subactions: supportedRuntimeModes.map((value) => {
           return {
-            id: option.id,
-            title: option.title,
+            id: `options:runtime:${value}`,
+            title: RUNTIME_MODE_PRESENTATION[value].label,
             state: flow.runtimeMode === value ? ("on" as const) : undefined,
           };
         }),
@@ -304,7 +300,7 @@ export function NewTaskDraftScreen(props: {
         }),
       },
     ],
-    [flow.interactionMode, flow.runtimeMode, providerOptionDescriptors],
+    [flow.interactionMode, flow.runtimeMode, providerOptionDescriptors, supportedRuntimeModes],
   );
 
   const workspaceMenuActions = useMemo(() => {

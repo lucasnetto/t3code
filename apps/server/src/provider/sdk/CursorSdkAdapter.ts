@@ -163,15 +163,19 @@ function makeResumeCursor(agentId: string, runId?: string): CursorSdkResumeCurso
 function validateRuntimeMode(
   mode: RuntimeMode,
 ): Effect.Effect<void, ProviderAdapterValidationError> {
-  return mode === "full-access"
+  return mode === "auto-review" || mode === "full-access"
     ? Effect.void
     : Effect.fail(
         new ProviderAdapterValidationError({
           provider: PROVIDER,
           operation: "startSession",
-          issue: `Cursor SDK supports only 'full-access'; received '${mode}'.`,
+          issue: `Cursor SDK supports only 'auto-review' and 'full-access'; received '${mode}'.`,
         }),
       );
+}
+
+function usesCursorSdkAutoReview(mode: RuntimeMode): boolean {
+  return mode === "auto-review";
 }
 
 function historyFromConversation(
@@ -512,6 +516,7 @@ export const makeCursorSdkAdapter = Effect.fn("makeCursorSdkAdapter")(function* 
         if (existing) yield* disposeSession(existing, true);
         const resume = parseResumeCursor(input.resumeCursor);
         const modelSelection = resolveCursorSdkModelSelection(input.modelSelection);
+        const autoReview = usesCursorSdkAutoReview(input.runtimeMode);
         const now = yield* nowIso;
         const creation = {
           threadId: input.threadId,
@@ -521,7 +526,7 @@ export const makeCursorSdkAdapter = Effect.fn("makeCursorSdkAdapter")(function* 
             provider: PROVIDER,
             providerInstanceId: boundInstanceId,
             status: "connecting",
-            runtimeMode: "full-access",
+            runtimeMode: input.runtimeMode,
             cwd,
             model: modelSelection.id,
             threadId: input.threadId,
@@ -554,12 +559,12 @@ export const makeCursorSdkAdapter = Effect.fn("makeCursorSdkAdapter")(function* 
                   ? client.resumeAgent(resume.agentId, {
                       apiKey,
                       model: modelSelection,
-                      local: { cwd, store: store.value, autoReview: false },
+                      local: { cwd, store: store.value, autoReview },
                     })
                   : client.createAgent({
                       apiKey,
                       model: modelSelection,
-                      local: { cwd, store: store.value, autoReview: false },
+                      local: { cwd, store: store.value, autoReview },
                       mode: "agent",
                     }),
               mapError: (cause) =>
@@ -1003,7 +1008,7 @@ export const makeCursorSdkAdapter = Effect.fn("makeCursorSdkAdapter")(function* 
       new ProviderAdapterValidationError({
         provider: PROVIDER,
         operation,
-        issue: "Cursor SDK does not expose interactive approval responses in full-access mode.",
+        issue: "Cursor SDK does not expose interactive approval responses for its runtime modes.",
       }),
     );
 

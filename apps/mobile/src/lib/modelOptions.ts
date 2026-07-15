@@ -1,8 +1,10 @@
 import type {
   ModelCapabilities,
   ModelSelection,
+  RuntimeMode,
   ServerConfig as T3ServerConfig,
 } from "@t3tools/contracts";
+import { getSupportedRuntimeModes } from "@t3tools/client-runtime/runtime-modes";
 import {
   buildProviderOptionSelectionsFromDescriptors,
   getProviderOptionDescriptors,
@@ -15,6 +17,7 @@ export type ModelOption = {
   readonly providerKey: string;
   readonly providerLabel: string;
   readonly providerDriver: string;
+  readonly supportedRuntimeModes: ReadonlyArray<RuntimeMode>;
   readonly capabilities: ModelCapabilities | null;
   readonly selection: ModelSelection;
 };
@@ -78,6 +81,7 @@ export function buildModelOptions(
         providerKey: provider.instanceId,
         providerLabel,
         providerDriver: provider.driver,
+        supportedRuntimeModes: getSupportedRuntimeModes(provider),
         capabilities: model.capabilities,
         selection: normalizeSelectionOptions(
           {
@@ -107,6 +111,7 @@ export function buildModelOptions(
         providerKey: fallbackModelSelection.instanceId,
         providerLabel,
         providerDriver: fallbackModelSelection.instanceId,
+        supportedRuntimeModes: getSupportedRuntimeModes(undefined),
         capabilities: null,
         selection: fallbackModelSelection,
       });

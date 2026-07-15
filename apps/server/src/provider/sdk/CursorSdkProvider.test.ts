@@ -21,11 +21,11 @@ const unusedClient = {
 const model: CursorSdkModel = { id: "composer-2", displayName: "Composer 2" };
 
 describe("CursorSdkProvider", () => {
-  it.effect("advertises full-access only and explains a missing API key", () =>
+  it.effect("advertises auto-review and full-access and explains a missing API key", () =>
     Effect.gen(function* () {
       const snapshot = yield* buildInitialCursorSdkProviderSnapshot({ settings, environment: {} });
 
-      expect(snapshot.supportedRuntimeModes).toEqual(["full-access"]);
+      expect(snapshot.supportedRuntimeModes).toEqual(["auto-review", "full-access"]);
       expect(snapshot.auth.status).toBe("unauthenticated");
       expect(snapshot.message).toContain("CURSOR_API_KEY");
     }),

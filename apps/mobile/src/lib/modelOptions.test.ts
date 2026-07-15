@@ -12,6 +12,7 @@ describe("mobile model options", () => {
           instanceId: "codex",
           driver: "codex",
           displayName: "Codex",
+          supportedRuntimeModes: ["full-access"],
           enabled: true,
           installed: true,
           auth: { status: "authenticated" },
@@ -48,5 +49,6 @@ describe("mobile model options", () => {
 
     expect(option?.capabilities?.optionDescriptors?.[0]?.id).toBe("serviceTier");
     expect(option?.selection.options).toEqual([{ id: "serviceTier", value: "default" }]);
+    expect(option?.supportedRuntimeModes).toEqual(["full-access"]);
   });
 });

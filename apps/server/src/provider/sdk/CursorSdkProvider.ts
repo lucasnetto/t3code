@@ -29,7 +29,7 @@ export const CURSOR_SDK_PRESENTATION = {
   displayName: "Cursor SDK",
   badgeLabel: "Early Access",
   showInteractionModeToggle: true,
-  supportedRuntimeModes: ["full-access"] as const,
+  supportedRuntimeModes: ["auto-review", "full-access"] as const,
 } as const;
 
 export function resolveCursorSdkApiKey(

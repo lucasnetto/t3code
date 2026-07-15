@@ -9,6 +9,10 @@ import type {
   ServerConfig as T3ServerConfig,
 } from "@t3tools/contracts";
 import {
+  getSupportedRuntimeModes,
+  RUNTIME_MODE_PRESENTATION,
+} from "@t3tools/client-runtime/runtime-modes";
+import {
   detectComposerTrigger,
   replaceTextRange,
   serializeComposerFileLink,
@@ -321,6 +325,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       ) ?? null
     );
   }, [props.serverConfig, props.selectedThread.modelSelection.instanceId]);
+  const supportedRuntimeModes = getSupportedRuntimeModes(selectedProviderStatus);
 
   // ── Trigger detection ────────────────────────────────────
   const [composerSelection, setComposerSelection] = useState(() => ({
@@ -622,21 +627,11 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       {
         id: "options-runtime",
         title: "Runtime",
-        subtitle:
-          currentRuntimeMode === "approval-required"
-            ? "Approve actions"
-            : currentRuntimeMode === "auto-accept-edits"
-              ? "Auto-accept edits"
-              : "Full access",
-        subactions: [
-          { id: "options:runtime:approval-required", title: "Approve actions" },
-          { id: "options:runtime:auto-accept-edits", title: "Auto-accept edits" },
-          { id: "options:runtime:full-access", title: "Full access" },
-        ].map((option) => {
-          const value = option.id.replace("options:runtime:", "");
+        subtitle: RUNTIME_MODE_PRESENTATION[currentRuntimeMode].label,
+        subactions: supportedRuntimeModes.map((value) => {
           return {
-            id: option.id,
-            title: option.title,
+            id: `options:runtime:${value}`,
+            title: RUNTIME_MODE_PRESENTATION[value].label,
             state: currentRuntimeMode === value ? ("on" as const) : undefined,
           };
         }),
@@ -658,7 +653,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         }),
       },
     ],
-    [currentInteractionMode, currentRuntimeMode, providerOptionDescriptors],
+    [currentInteractionMode, currentRuntimeMode, providerOptionDescriptors, supportedRuntimeModes],
   );
 
   // ── Menu handlers ────────────────────────────────────────

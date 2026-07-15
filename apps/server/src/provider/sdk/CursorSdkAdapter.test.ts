@@ -428,18 +428,23 @@ describe("CursorSdkAdapter", () => {
           provider: "cursorSdk",
           agentId: "created-agent",
         });
+        expect(created.runtimeMode).toBe("full-access");
 
         const resumed = yield* adapter.startSession({
           provider: cursorSdk,
           threadId,
           cwd: process.cwd(),
-          runtimeMode: "full-access",
+          runtimeMode: "auto-review",
           resumeCursor: created.resumeCursor,
         });
         expect(resumeCalls).toHaveLength(1);
         expect(resumeCalls[0]?.agentId).toBe("created-agent");
+        expect(resumeCalls[0]?.options).toMatchObject({
+          local: { cwd: process.cwd(), autoReview: true },
+        });
         expect(disposed).toEqual(["created"]);
         expect(resumed.resumeCursor).toMatchObject({ agentId: "resumed-agent" });
+        expect(resumed.runtimeMode).toBe("auto-review");
 
         yield* adapter.stopSession(threadId);
         yield* adapter.stopSession(threadId);

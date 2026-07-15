@@ -42,16 +42,18 @@ Draft threads remain on their optimistic timeline until the synchronized server 
 persisted user message. This prevents Cursor SDK's early session lifecycle events from promoting the
 route before the first message is available and making that message flash or disappear.
 
-The provider currently advertises only `full-access`. The composer filters unsupported runtime
-modes and normalizes stale persisted selections when switching to a Cursor SDK instance. Providers
-that do not publish runtime-mode metadata retain the existing three-mode behavior.
+The provider advertises Cursor's classifier-backed `auto-review` mode alongside `full-access`.
+Selecting Auto-review enables the SDK's local `autoReview` option for both new and resumed agents;
+Full access keeps it disabled. Web and mobile composers filter their access choices through the
+provider's runtime-mode metadata and normalize stale selections when switching providers while
+drafting a new task. Providers that do not publish runtime-mode metadata retain the existing three
+generic access modes.
 
 ## Current limitations
 
-- SDK auto-review remains explicitly disabled pending a separate product and event-mapping design.
 - Durable conversation rollback is not exposed by the SDK integration.
 - Interactive approval replies are unavailable because this provider operates only in full-access
-  mode.
+  or SDK-managed auto-review mode.
 
 ## Validation
 

@@ -405,6 +405,12 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
       expect(codexSnapshot.instanceId).toBe(codexId);
       expect(codexSnapshot.driver).toBe(codexDriverKind);
       expect(codexSnapshot.enabled).toBe(false);
+      expect(codexSnapshot.supportedRuntimeModes).toEqual([
+        "approval-required",
+        "auto-accept-edits",
+        "auto-review",
+        "full-access",
+      ]);
       expect(codexSnapshot.continuation?.groupKey).toBe("codex:home:/home/julius/.codex");
 
       const claudeSnapshot = yield* claude!.snapshot.getSnapshot;
@@ -425,7 +431,7 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
       expect(cursorSdkSnapshot.instanceId).toBe(cursorSdkId);
       expect(cursorSdkSnapshot.driver).toBe(cursorSdkDriverKind);
       expect(cursorSdkSnapshot.enabled).toBe(false);
-      expect(cursorSdkSnapshot.supportedRuntimeModes).toEqual(["full-access"]);
+      expect(cursorSdkSnapshot.supportedRuntimeModes).toEqual(["auto-review", "full-access"]);
       expect(cursorSdkSnapshot.continuation?.groupKey).toBe(
         `${cursorSdkDriverKind}:instance:${cursorSdkId}`,
       );
