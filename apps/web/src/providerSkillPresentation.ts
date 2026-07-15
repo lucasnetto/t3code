@@ -27,7 +27,7 @@ export function serializeProviderSkillInvocation(
   provider: ProviderDriverKind,
   skill: Pick<ServerProviderSkill, "name">,
 ): string {
-  return `${provider === "cursor" ? "/" : "$"}${skill.name}`;
+  return `${provider === "cursor" || provider === "cursorSdk" ? "/" : "$"}${skill.name}`;
 }
 
 export function formatProviderSkillInstallSource(

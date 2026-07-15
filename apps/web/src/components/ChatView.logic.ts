@@ -261,9 +261,12 @@ export function buildExpiredTerminalContextToastCopy(
 }
 
 export function threadHasStarted(thread: Thread | null | undefined): boolean {
-  return Boolean(
-    thread && (thread.latestTurn !== null || thread.messages.length > 0 || thread.session !== null),
-  );
+  // Draft promotion crosses from local optimistic state to the independently
+  // synchronized server detail stream. Provider session and turn lifecycle can
+  // arrive before that stream contains the user message (Cursor SDK commonly
+  // exposes this ordering), so neither is sufficient acknowledgement for the
+  // handoff. Keep rendering the draft until the persisted user row is present.
+  return thread?.messages.some((message) => message.role === "user") ?? false;
 }
 
 // `threadProvider` is the open branded driver kind carried by the session.

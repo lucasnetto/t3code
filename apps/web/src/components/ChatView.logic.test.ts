@@ -15,6 +15,7 @@ import {
   reconcileRetainedMountedThreadIds,
   resolveSendEnvMode,
   shouldWriteThreadErrorToCurrentServerThread,
+  threadHasStarted,
 } from "./ChatView.logic";
 
 const environmentId = EnvironmentId.make("environment-local");
@@ -69,6 +70,33 @@ const readySession = {
   lastError: null,
   updatedAt: "2026-03-29T00:00:10.000Z",
 };
+
+describe("threadHasStarted", () => {
+  it("waits for the persisted user message before promoting a draft", () => {
+    expect(threadHasStarted(makeThread({ session: readySession }))).toBe(false);
+    expect(threadHasStarted(makeThread({ latestTurn: completedTurn }))).toBe(false);
+  });
+
+  it("promotes once the server detail contains the user message", () => {
+    expect(
+      threadHasStarted(
+        makeThread({
+          messages: [
+            {
+              id: "message-1" as never,
+              role: "user",
+              text: "hello",
+              turnId: null,
+              streaming: false,
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+        }),
+      ),
+    ).toBe(true);
+  });
+});
 
 describe("buildThreadTurnInterruptInput", () => {
   it("targets the session's active running turn", () => {

@@ -87,6 +87,25 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
   });
 });
 
+describe("ServerSettings Cursor SDK provider", () => {
+  it("defaults the distinct Cursor SDK provider off", () => {
+    const decoded = decodeServerSettings({});
+
+    expect(decoded.providers.cursorSdk).toEqual({ enabled: false, customModels: [] });
+  });
+
+  it("accepts Cursor SDK provider patches", () => {
+    const patch = decodeServerSettingsPatch({
+      providers: { cursorSdk: { enabled: true, customModels: ["composer-2"] } },
+    });
+
+    expect(patch.providers?.cursorSdk).toEqual({
+      enabled: true,
+      customModels: ["composer-2"],
+    });
+  });
+});
+
 describe("ServerSettings worktree defaults", () => {
   it("defaults start-from-origin off for legacy configs", () => {
     expect(decodeServerSettings({}).newWorktreesStartFromOrigin).toBe(false);

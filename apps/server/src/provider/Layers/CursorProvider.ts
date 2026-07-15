@@ -57,6 +57,7 @@ const CURSOR_PRESENTATION = {
   displayName: "Cursor",
   badgeLabel: "Early Access",
   showInteractionModeToggle: true,
+  supportedRuntimeModes: ["approval-required", "auto-accept-edits", "full-access"] as const,
 } as const;
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],

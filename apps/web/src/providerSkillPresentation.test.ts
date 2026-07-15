@@ -33,6 +33,11 @@ describe("serializeProviderSkillInvocation", () => {
         name: "review-follow-up",
       }),
     ).toBe("/review-follow-up");
+    expect(
+      serializeProviderSkillInvocation(ProviderDriverKind.make("cursorSdk"), {
+        name: "review-follow-up",
+      }),
+    ).toBe("/review-follow-up");
   });
 
   it("preserves Codex dollar syntax", () => {
