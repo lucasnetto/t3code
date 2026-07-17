@@ -140,6 +140,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
         NodeServices.layer,
         DesktopConfig.layerTest({
           T3CODE_HOME: `/tmp/t3-desktop-updates-test-${process.pid}`,
+          T3CODE_ENABLE_AUTO_UPDATE: "true",
           T3CODE_DESKTOP_MOCK_UPDATES: "true",
           T3CODE_DESKTOP_MOCK_UPDATE_SERVER_PORT: "4141",
           ...options.env,
@@ -173,6 +174,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
     Layer.provideMerge(
       DesktopConfig.layerTest({
         T3CODE_HOME: `/tmp/t3-desktop-updates-test-${process.pid}`,
+        T3CODE_ENABLE_AUTO_UPDATE: "true",
         T3CODE_DESKTOP_MOCK_UPDATES: "true",
         T3CODE_DESKTOP_MOCK_UPDATE_SERVER_PORT: "4141",
         ...options.env,
@@ -201,6 +203,33 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
 }
 
 describe("DesktopUpdates", () => {
+  it.effect("keeps desktop updates disabled in fork builds without an explicit opt-in", () => {
+    const harness = makeHarness({
+      env: { T3CODE_ENABLE_AUTO_UPDATE: "false" },
+    });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+
+        const state = yield* updates.getState;
+        const disabledReason = yield* updates.disabledReason;
+        const checkResult = yield* updates.check("manual");
+
+        assert.equal(state.enabled, false);
+        assert.equal(state.status, "disabled");
+        assert.deepEqual(
+          disabledReason,
+          Option.some("Automatic desktop updates are disabled in this fork."),
+        );
+        assert.equal(harness.listenerCount(), 0);
+        assert.equal(harness.checkCount(), 0);
+        assert.equal(checkResult.checked, false);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
   it("preserves complete causes for update poller and event failures", () => {
     const cause = Cause.combine(
       Cause.fail(new Error("updater failed")),

@@ -217,9 +217,13 @@ function getAutoUpdateDisabledReason(args: {
   isPackaged: boolean;
   platform: NodeJS.Platform;
   appImage?: string | undefined;
+  enabledForFork: boolean;
   disabledByEnv: boolean;
   hasUpdateFeedConfig: boolean;
 }): string | null {
+  if (!args.enabledForFork) {
+    return "Automatic desktop updates are disabled in this fork.";
+  }
   if (!args.hasUpdateFeedConfig) {
     return "Automatic updates are not available because no update feed is configured.";
   }
@@ -302,6 +306,7 @@ export const make = Effect.gen(function* () {
         isPackaged: environment.isPackaged,
         platform: environment.platform,
         appImage: Option.getOrUndefined(config.appImagePath),
+        enabledForFork: config.enableAutoUpdate,
         disabledByEnv: config.disableAutoUpdate,
         hasUpdateFeedConfig: hasFeedConfig,
       }),
