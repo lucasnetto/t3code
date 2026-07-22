@@ -1,5 +1,3 @@
-export const T3CODE_STATE_DIRECTORY_NAME = "userdata";
-
 export function isWindowsDrivePath(value: string): boolean {
   return /^[a-zA-Z]:([/\\]|$)/.test(value);
 }

@@ -6,7 +6,6 @@
  *
  * @module ServerConfig
  */
-import { T3CODE_STATE_DIRECTORY_NAME } from "@t3tools/shared/path";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -44,6 +43,10 @@ export interface ServerDerivedPaths {
   readonly environmentIdPath: string;
   readonly serverRuntimeStatePath: string;
   readonly secretsDir: string;
+}
+
+export interface DeriveServerPathsOptions {
+  readonly baseDirIsExplicit?: boolean;
 }
 
 /**
@@ -91,9 +94,14 @@ export const layer = (config: ServerConfig["Service"]) => Layer.succeed(ServerCo
 
 export const deriveServerPaths = Effect.fn(function* (
   baseDir: ServerConfig["Service"]["baseDir"],
+  devUrl: ServerConfig["Service"]["devUrl"],
+  options: DeriveServerPathsOptions = {},
 ): Effect.fn.Return<ServerDerivedPaths, never, Path.Path> {
   const { join } = yield* Path.Path;
-  const stateDir = join(baseDir, T3CODE_STATE_DIRECTORY_NAME);
+  const stateDir = join(
+    baseDir,
+    devUrl !== undefined && !options.baseDirIsExplicit ? "dev" : "userdata",
+  );
   const dbPath = join(stateDir, "state.sqlite");
   const attachmentsDir = join(stateDir, "attachments");
   const logsDir = join(stateDir, "logs");
@@ -152,7 +160,7 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     typeof baseDirOrPrefix === "string"
       ? baseDirOrPrefix
       : yield* fs.makeTempDirectoryScoped({ prefix: baseDirOrPrefix.prefix });
-  const derivedPaths = yield* deriveServerPaths(baseDir);
+  const derivedPaths = yield* deriveServerPaths(baseDir, devUrl);
   yield* ensureServerDirectories(derivedPaths);
 
   return ServerConfig.of({

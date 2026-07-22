@@ -17,7 +17,7 @@ const makeServerEnvironmentLayer = (baseDir: string) =>
   ServerEnvironment.layer.pipe(Layer.provide(ServerConfig.layerTest(process.cwd(), baseDir)));
 
 const makeServerConfig = Effect.fn(function* (baseDir: string) {
-  const derivedPaths = yield* ServerConfig.deriveServerPaths(baseDir);
+  const derivedPaths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
 
   return {
     ...derivedPaths,
@@ -67,6 +67,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
 
       expect(first.environmentId).toBe(second.environmentId);
       expect(second.capabilities.repositoryIdentity).toBe(true);
+      expect(second.capabilities.connectionProbe).toBe(true);
     }),
   );
 

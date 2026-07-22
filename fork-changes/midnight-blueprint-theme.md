@@ -8,6 +8,10 @@ colors, Markdown code blocks, file previews, and diff rendering. The original VS
 is registered with Pierre as a custom Shiki theme so syntax colors are preserved in both the main
 thread and worker-backed renderers.
 
+Sidebar V2's scoped navigation palette has a Midnight Blueprint override so its rail and stage
+art continue using the theme's chrome, accent, border, and muted colors instead of the generic dark
+sidebar palette.
+
 The preference is stored under the existing `t3code:theme` key as `midnight-blueprint`. Desktop
 IPC continues to receive the supported native value `dark`, while the web layer retains the named
 theme for palette selection.

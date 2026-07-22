@@ -43,12 +43,7 @@ function fallbackModels(
   settings: CursorSdkSettings,
   lastKnownModels: ReadonlyArray<ServerProviderModel>,
 ): ReadonlyArray<ServerProviderModel> {
-  return providerModelsFromSettings(
-    lastKnownModels,
-    CURSOR_SDK_DRIVER_KIND,
-    settings.customModels,
-    EMPTY_CAPABILITIES,
-  );
+  return providerModelsFromSettings(lastKnownModels, settings.customModels, EMPTY_CAPABILITIES);
 }
 
 export function buildInitialCursorSdkProviderSnapshot(input: {
