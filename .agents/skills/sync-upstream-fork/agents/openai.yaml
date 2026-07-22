@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sync Upstream Fork"
+  short_description: "Merge, push, and open safe upstream updates"
+  default_prompt: "Use $sync-upstream-fork to sync upstream/main, preserve fork changes, push, and open the updated DMG."
