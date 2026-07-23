@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import { ProjectId, ProviderInstanceId, TaskId, ThreadId } from "@t3tools/contracts";
 import type { OrchestrationShellSnapshot, OrchestrationShellStreamEvent } from "@t3tools/contracts";
 
 import { applyShellStreamEvent } from "./shellReducer.ts";
@@ -45,7 +45,38 @@ const stubThread = {
   session: null,
 } as const;
 
+const stubTask = {
+  id: TaskId.make("task-1"),
+  title: "Coordinate release",
+  status: "active" as const,
+  rootPath: "/tmp/t3/tasks/task-1",
+  workspaceProjectId: ProjectId.make("project-task-1"),
+  approvedProjectIds: [ProjectId.make("project-1")],
+  createdAt: "2026-04-01T00:00:00.000Z",
+  updatedAt: "2026-04-01T00:00:00.000Z",
+  completedAt: null,
+} as const;
+
 describe("applyShellStreamEvent", () => {
+  describe("task-upserted", () => {
+    it("adds and updates a task", () => {
+      const added = applyShellStreamEvent(baseSnapshot, {
+        kind: "task-upserted",
+        sequence: 1,
+        task: stubTask,
+      });
+      const updated = applyShellStreamEvent(added, {
+        kind: "task-upserted",
+        sequence: 2,
+        task: { ...stubTask, title: "Updated release" },
+      });
+
+      expect(updated.tasks).toHaveLength(1);
+      expect(updated.tasks?.[0]?.title).toBe("Updated release");
+      expect(updated.snapshotSequence).toBe(2);
+    });
+  });
+
   it("ignores stale project upserts without mutating the snapshot", () => {
     const snapshotWithProject: OrchestrationShellSnapshot = {
       ...baseSnapshot,

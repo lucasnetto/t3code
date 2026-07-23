@@ -478,6 +478,11 @@ export type OrchestrationShellSnapshot = typeof OrchestrationShellSnapshot.Type;
 
 export const OrchestrationShellStreamEvent = Schema.Union([
   Schema.Struct({
+    kind: Schema.Literal("task-upserted"),
+    sequence: NonNegativeInt,
+    task: OrchestrationTask,
+  }),
+  Schema.Struct({
     kind: Schema.Literal("project-upserted"),
     sequence: NonNegativeInt,
     project: OrchestrationProjectShell,

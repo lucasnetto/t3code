@@ -52,6 +52,7 @@ import {
   AssetWorkspaceContextNotFoundError,
   AssetWorkspaceContextResolutionError,
   EnvironmentAuthorizationError,
+  TaskId,
   ThreadId,
   type TerminalAttachStreamEvent,
   type TerminalError,
@@ -627,6 +628,10 @@ const makeWsRpcLayer = (
         event: OrchestrationEvent,
       ): Effect.Effect<Option.Option<OrchestrationShellStreamEvent>, never, never> => {
         switch (event.type) {
+          case "task.created":
+          case "task.updated":
+          case "task.repository-approved":
+            return taskUpsert(event.payload.taskId, event.sequence);
           case "project.created":
           case "project.meta-updated":
             return projectUpsertOrRemove(event.payload.projectId, event.sequence);
@@ -663,7 +668,7 @@ const makeWsRpcLayer = (
       // If both attempts fail, log and drop the stream item; treating an error as
       // a missing row would incorrectly remove a still-active aggregate.
       const retryShellProjectionRead = <A, E>(
-        aggregateKind: "project" | "thread",
+        aggregateKind: "task" | "project" | "thread",
         aggregateId: string,
         read: Effect.Effect<A, E>,
       ): Effect.Effect<Option.Option<A>, never, never> =>
@@ -678,6 +683,24 @@ const makeWsRpcLayer = (
             }),
           ),
           Effect.orElseSucceed(() => Option.none()),
+        );
+
+      const taskUpsert = (
+        taskId: TaskId,
+        sequence: number,
+      ): Effect.Effect<Option.Option<OrchestrationShellStreamEvent>, never, never> =>
+        retryShellProjectionRead("task", taskId, projectionSnapshotQuery.getShellSnapshot()).pipe(
+          Effect.map(
+            Option.flatMap((snapshot) =>
+              Option.fromNullishOr(snapshot.tasks?.find((task) => task.id === taskId)).pipe(
+                Option.map((nextTask) => ({
+                  kind: "task-upserted" as const,
+                  sequence,
+                  task: nextTask,
+                })),
+              ),
+            ),
+          ),
         );
 
       const projectUpsertOrRemove = (
