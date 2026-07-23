@@ -15,6 +15,7 @@ import {
   ProjectMetaUpdatedPayload,
   OrchestrationProposedPlan,
   OrchestrationSession,
+  OrchestrationTask,
   OrchestrationThread,
   OrchestrationThreadShell,
   ProjectCreateCommand,
@@ -39,6 +40,7 @@ const decodeThreadTurnStartRequestedPayload = Schema.decodeUnknownEffect(
 const decodeOrchestrationLatestTurn = Schema.decodeUnknownEffect(OrchestrationLatestTurn);
 const decodeOrchestrationProposedPlan = Schema.decodeUnknownEffect(OrchestrationProposedPlan);
 const decodeOrchestrationSession = Schema.decodeUnknownEffect(OrchestrationSession);
+const decodeOrchestrationTask = Schema.decodeUnknownEffect(OrchestrationTask);
 const decodeOrchestrationThread = Schema.decodeUnknownEffect(OrchestrationThread);
 const decodeOrchestrationThreadShell = Schema.decodeUnknownEffect(OrchestrationThreadShell);
 const encodeThreadCreatedPayload = Schema.encodeEffect(ThreadCreatedPayload);
@@ -438,6 +440,59 @@ it.effect("defaults settled fields when decoding historical thread data", () =>
     assert.strictEqual(thread.settledAt, null);
     assert.strictEqual(shell.settledOverride, null);
     assert.strictEqual(shell.settledAt, null);
+  }),
+);
+
+it.effect("decodes task state and immutable thread creation lineage", () =>
+  Effect.gen(function* () {
+    const task = yield* decodeOrchestrationTask({
+      id: "task-1",
+      title: "Coordinate release",
+      status: "active",
+      rootPath: "/tmp/t3/tasks/task-1",
+      workspaceProjectId: "project-task-1",
+      approvedProjectIds: ["project-api", "project-web"],
+      createdAt: "2026-07-23T12:00:00.000Z",
+      updatedAt: "2026-07-23T12:00:00.000Z",
+      completedAt: null,
+    });
+    const thread = yield* decodeOrchestrationThread({
+      id: "thread-worker",
+      projectId: "project-api",
+      title: "Implement API",
+      modelSelection: { instanceId: "codex", model: "gpt-5.6" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: "feature/api",
+      worktreePath: "/tmp/t3/tasks/task-1/worktrees/thread-worker-api",
+      latestTurn: null,
+      createdAt: "2026-07-23T12:01:00.000Z",
+      updatedAt: "2026-07-23T12:01:00.000Z",
+      archivedAt: null,
+      settledOverride: null,
+      settledAt: null,
+      deletedAt: null,
+      messages: [],
+      proposedPlans: [],
+      activities: [],
+      checkpoints: [],
+      session: null,
+      taskContext: {
+        taskId: "task-1",
+        createdBy: {
+          kind: "agent",
+          threadId: "thread-coordinator",
+          turnId: "turn-1",
+        },
+      },
+    });
+
+    assert.strictEqual(task.approvedProjectIds.length, 2);
+    assert.strictEqual(thread.taskContext?.createdBy.kind, "agent");
+    if (thread.taskContext?.createdBy.kind === "agent") {
+      assert.strictEqual(thread.taskContext.createdBy.threadId, "thread-coordinator");
+      assert.strictEqual(thread.taskContext.createdBy.turnId, "turn-1");
+    }
   }),
 );
 
