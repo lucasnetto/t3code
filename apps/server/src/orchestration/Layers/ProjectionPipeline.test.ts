@@ -5,6 +5,7 @@ import {
   EventId,
   MessageId,
   ProjectId,
+  TaskId,
   ThreadId,
   TurnId,
   ProviderInstanceId,
@@ -2772,6 +2773,85 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
           defaultModelSelection: '{"instanceId":"codex","model":"gpt-5"}',
         },
       ]);
+    }),
+  );
+
+  it.effect("persists task membership, hidden workspace projects, and user thread origin", () =>
+    Effect.gen(function* () {
+      const engine = yield* OrchestrationEngineService;
+      const sql = yield* SqlClient.SqlClient;
+      const createdAt = "2026-07-23T12:00:00.000Z";
+
+      yield* engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-task-project-create"),
+        projectId: ProjectId.make("project-api"),
+        title: "API",
+        workspaceRoot: "/tmp/project-api",
+        createdAt,
+      });
+      yield* engine.dispatch({
+        type: "task.create",
+        commandId: CommandId.make("cmd-task-create"),
+        taskId: TaskId.make("task-1"),
+        title: "Coordinate release",
+        rootPath: "/tmp/t3/tasks/task-1",
+        workspaceProjectId: ProjectId.make("project-task-1"),
+        approvedProjectIds: [ProjectId.make("project-api")],
+        createdAt,
+      });
+      yield* engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-task-thread-create"),
+        threadId: ThreadId.make("thread-task-user"),
+        projectId: ProjectId.make("project-task-1"),
+        taskId: TaskId.make("task-1"),
+        title: "Coordinate",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.6",
+        },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      });
+
+      const taskRows = yield* sql<{
+        readonly taskId: string;
+        readonly approvedProjectIds: string;
+      }>`
+        SELECT
+          task_id AS "taskId",
+          approved_project_ids_json AS "approvedProjectIds"
+        FROM projection_tasks
+      `;
+      assert.deepEqual(taskRows, [
+        {
+          taskId: "task-1",
+          approvedProjectIds: '["project-api"]',
+        },
+      ]);
+
+      const workspaceRows = yield* sql<{ readonly visibility: string }>`
+        SELECT visibility
+        FROM projection_projects
+        WHERE project_id = 'project-task-1'
+      `;
+      assert.deepEqual(workspaceRows, [{ visibility: "internal-task" }]);
+
+      const threadRows = yield* sql<{
+        readonly taskId: string | null;
+        readonly createdByKind: string | null;
+      }>`
+        SELECT
+          task_id AS "taskId",
+          created_by_kind AS "createdByKind"
+        FROM projection_threads
+        WHERE thread_id = 'thread-task-user'
+      `;
+      assert.deepEqual(threadRows, [{ taskId: "task-1", createdByKind: "user" }]);
     }),
   );
 });

@@ -13,6 +13,7 @@ import {
   ProjectId,
   ProviderInteractionMode,
   RuntimeMode,
+  TaskId,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -43,6 +44,10 @@ export const ProjectionThread = Schema.Struct({
   pendingUserInputCount: NonNegativeInt,
   hasActionableProposedPlan: NonNegativeInt,
   deletedAt: Schema.NullOr(IsoDateTime),
+  taskId: Schema.optionalKey(Schema.NullOr(TaskId)),
+  createdByKind: Schema.optionalKey(Schema.NullOr(Schema.Literals(["user", "agent"]))),
+  createdByThreadId: Schema.optionalKey(Schema.NullOr(ThreadId)),
+  createdByTurnId: Schema.optionalKey(Schema.NullOr(TurnId)),
 });
 export type ProjectionThread = typeof ProjectionThread.Type;
 
