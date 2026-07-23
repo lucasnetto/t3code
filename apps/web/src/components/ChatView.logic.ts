@@ -27,6 +27,12 @@ export const MAX_HIDDEN_MOUNTED_PREVIEW_THREADS = 3;
 
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
 
+export function isAgentCreatedTaskThread(
+  thread: Pick<Thread, "taskContext"> | null | undefined,
+): boolean {
+  return thread?.taskContext?.createdBy.kind === "agent";
+}
+
 export function buildLocalDraftThread(
   threadId: ThreadId,
   draftThread: DraftThreadState,

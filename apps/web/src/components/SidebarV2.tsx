@@ -10,6 +10,8 @@ import {
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import {
   CheckIcon,
+  BotIcon,
+  BriefcaseBusinessIcon,
   CircleCheckIcon,
   CircleDashedIcon,
   CloudIcon,
@@ -61,7 +63,7 @@ import { openCommandPalette } from "../commandPaletteBus";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useClientSettings } from "../hooks/useSettings";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
-import { useProjects, useThreadShells } from "../state/entities";
+import { useProjects, useTasks, useThreadShells } from "../state/entities";
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
 import { vcsEnvironment } from "../state/vcs";
 import { threadEnvironment } from "../state/threads";
@@ -129,6 +131,8 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   environmentLabel: string | null;
   projectCwd: string | null;
   projectTitle: string | null;
+  taskTitle: string | null;
+  agentParentTitle: string | null;
   providerEntryByInstanceId: ReadonlyMap<string, ProviderInstanceEntry>;
   onThreadClick: (event: ReactMouseEvent, threadRef: ScopedThreadRef) => void;
   onThreadActivate: (threadRef: ScopedThreadRef) => void;
@@ -386,7 +390,10 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
     return (
       <li
         data-thread-item
-        className="list-none [content-visibility:auto] [contain-intrinsic-size:auto_34px]"
+        className={cn(
+          "list-none [content-visibility:auto] [contain-intrinsic-size:auto_34px]",
+          props.agentParentTitle && "pl-3",
+        )}
       >
         <div
           role="button"
@@ -411,7 +418,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
               environmentId={thread.environmentId}
               cwd={props.projectCwd ?? ""}
               className="size-3.5"
-              fallbackIcon={MessageSquareIcon}
+              fallbackIcon={props.agentParentTitle ? BotIcon : MessageSquareIcon}
             />
           </span>
           {title}
@@ -458,7 +465,10 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   return (
     <li
       data-thread-item
-      className="list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_96px]"
+      className={cn(
+        "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_96px]",
+        props.agentParentTitle && "pl-3",
+      )}
     >
       <div
         role="button"
@@ -488,8 +498,9 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
               environmentId={thread.environmentId}
               cwd={props.projectCwd ?? ""}
               className="size-3.5 shrink-0"
+              fallbackIcon={props.agentParentTitle ? BotIcon : BriefcaseBusinessIcon}
             />
-            {props.projectTitle ? (
+            {props.taskTitle || props.projectTitle ? (
               <span
                 className={cn(
                   "min-w-0 flex-1 truncate text-[13px] leading-5 text-muted-foreground/70",
@@ -500,7 +511,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                       : "font-medium",
                 )}
               >
-                {props.projectTitle}
+                {props.taskTitle ?? props.projectTitle}
               </span>
             ) : (
               <span className="flex-1" />
@@ -543,6 +554,13 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
           </div>
           <div className="mt-1 flex min-w-0">{title}</div>
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground/65">
+            {props.agentParentTitle ? (
+              <span className="max-w-28 shrink-0 truncate">
+                Agent · from {props.agentParentTitle}
+              </span>
+            ) : props.taskTitle ? (
+              <span className="max-w-28 shrink-0 truncate">Task</span>
+            ) : null}
             {thread.branch ? (
               <span className="min-w-0 flex-1 overflow-hidden whitespace-nowrap font-mono [mask-image:linear-gradient(to_right,#000_0,#000_calc(100%-1rem),transparent_100%)] [-webkit-mask-image:linear-gradient(to_right,#000_0,#000_calc(100%-1rem),transparent_100%)]">
                 {thread.branch}
@@ -613,6 +631,7 @@ function latestTurnDiff(
 
 export default function SidebarV2() {
   const projects = useProjects();
+  const tasks = useTasks();
   const threads = useThreadShells();
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
@@ -677,6 +696,17 @@ export default function SidebarV2() {
     () =>
       new Map(projects.map((project) => [`${project.environmentId}:${project.id}`, project.title])),
     [projects],
+  );
+  const taskTitleByKey = useMemo(
+    () => new Map(tasks.map((task) => [`${task.environmentId}:${task.id}`, task.title] as const)),
+    [tasks],
+  );
+  const threadTitleByKey = useMemo(
+    () =>
+      new Map(
+        threads.map((thread) => [`${thread.environmentId}:${thread.id}`, thread.title] as const),
+      ),
+    [threads],
   );
 
   // now is quantized to the minute so effectiveSettled memoization doesn't
@@ -1505,6 +1535,20 @@ export default function SidebarV2() {
                   }
                   projectTitle={
                     projectTitleByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null
+                  }
+                  taskTitle={
+                    thread.taskContext
+                      ? (taskTitleByKey.get(
+                          `${thread.environmentId}:${thread.taskContext.taskId}`,
+                        ) ?? null)
+                      : null
+                  }
+                  agentParentTitle={
+                    thread.taskContext?.createdBy.kind === "agent"
+                      ? (threadTitleByKey.get(
+                          `${thread.environmentId}:${thread.taskContext.createdBy.threadId}`,
+                        ) ?? thread.taskContext.createdBy.threadId)
+                      : null
                   }
                   providerEntryByInstanceId={providerEntryByInstanceId}
                   onThreadClick={handleThreadClick}

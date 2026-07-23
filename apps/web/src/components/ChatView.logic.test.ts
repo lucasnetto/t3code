@@ -3,6 +3,7 @@ import {
   MessageId,
   ProjectId,
   ProviderInstanceId,
+  TaskId,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -18,6 +19,7 @@ import {
   deriveComposerSendState,
   getStartedThreadModelChangeBlockReason,
   hasServerAcknowledgedLocalDispatch,
+  isAgentCreatedTaskThread,
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
   resolveSendEnvMode,
@@ -79,6 +81,36 @@ const readySession = {
   lastError: null,
   updatedAt: "2026-03-29T00:00:10.000Z",
 };
+
+describe("isAgentCreatedTaskThread", () => {
+  it("distinguishes agent lineage from user and standalone threads", () => {
+    expect(isAgentCreatedTaskThread(makeThread())).toBe(false);
+    expect(
+      isAgentCreatedTaskThread(
+        makeThread({
+          taskContext: {
+            taskId: TaskId.make("task-1"),
+            createdBy: { kind: "user" },
+          },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isAgentCreatedTaskThread(
+        makeThread({
+          taskContext: {
+            taskId: TaskId.make("task-1"),
+            createdBy: {
+              kind: "agent",
+              threadId: ThreadId.make("thread-parent"),
+              turnId: TurnId.make("turn-parent"),
+            },
+          },
+        }),
+      ),
+    ).toBe(true);
+  });
+});
 
 describe("threadHasStarted", () => {
   it("waits for the persisted user message before promoting a draft", () => {

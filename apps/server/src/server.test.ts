@@ -28,6 +28,7 @@ import {
   ResolvedKeybindingRule,
   ThreadId,
   TaskId,
+  TurnId,
   WS_METHODS,
   WsRpcGroup,
   EditorId,
@@ -6734,6 +6735,83 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.deepEqual(
         dispatchedCommands.map((command) => command.type),
         ["thread.archive", "thread.session.stop"],
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("keeps agent-created task threads read-only while allowing emergency interrupt", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread-agent-readonly");
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatchedCommands.push(command);
+                return { sequence: dispatchedCommands.length };
+              }),
+            readEvents: () => Stream.empty,
+          },
+          projectionSnapshotQuery: {
+            getThreadShellById: () =>
+              Effect.succeed(
+                Option.some(
+                  makeDefaultOrchestrationThreadShell({
+                    id: threadId,
+                    taskContext: {
+                      taskId: TaskId.make("task-readonly"),
+                      createdBy: {
+                        kind: "agent",
+                        threadId: ThreadId.make("thread-parent"),
+                        turnId: TurnId.make("turn-parent"),
+                      },
+                    },
+                  }),
+                ),
+              ),
+          },
+        },
+      });
+
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const sendResult = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-agent-readonly-send"),
+            threadId,
+            message: {
+              messageId: MessageId.make("msg-agent-readonly-send"),
+              role: "user",
+              text: "human follow-up",
+              attachments: [],
+            },
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt,
+          }),
+        ).pipe(Effect.result),
+      );
+      assertTrue(sendResult._tag === "Failure");
+      assert.include(sendResult.failure.message, "Agent-created task threads are read-only");
+
+      const interruptResult = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.turn.interrupt",
+            commandId: CommandId.make("cmd-agent-readonly-interrupt"),
+            threadId,
+            createdAt,
+          }),
+        ),
+      );
+      assert.equal(interruptResult.sequence, 1);
+      assert.deepEqual(
+        dispatchedCommands.map((command) => command.type),
+        ["thread.turn.interrupt"],
       );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
