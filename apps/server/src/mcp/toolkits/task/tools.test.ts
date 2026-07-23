@@ -25,6 +25,7 @@ import { McpSchema, McpServer } from "effect/unstable/ai";
 
 import * as CheckpointDiffQuery from "../../../checkpointing/CheckpointDiffQuery.ts";
 import { CheckpointRefUnavailableError } from "../../../checkpointing/Errors.ts";
+import * as GitManager from "../../../git/GitManager.ts";
 import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
 import { OrchestrationCommandInvariantError } from "../../../orchestration/Errors.ts";
 import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
@@ -298,6 +299,9 @@ const makeCoordinationTestLayer = (
   gitWorkflow: GitWorkflowService.GitWorkflowService["Service"] = {} as GitWorkflowService.GitWorkflowService["Service"],
   dispatchOverride?: OrchestrationEngine.OrchestrationEngineService["Service"]["dispatch"],
   setupRunner: ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"] = {} as ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"],
+  gitManager: GitManager.GitManager["Service"] = {
+    runStackedAction: () => Effect.die("unused"),
+  } as unknown as GitManager.GitManager["Service"],
 ) =>
   McpHttpServer.TaskCoordinationToolkitRegistrationLive.pipe(
     Layer.provideMerge(McpServer.McpServer.layer),
@@ -314,6 +318,7 @@ const makeCoordinationTestLayer = (
       } as unknown as OrchestrationEngine.OrchestrationEngineService["Service"]),
     ),
     Layer.provide(Layer.succeed(GitWorkflowService.GitWorkflowService, gitWorkflow)),
+    Layer.provide(Layer.succeed(GitManager.GitManager, gitManager)),
     Layer.provide(Layer.succeed(ProjectSetupScriptRunner.ProjectSetupScriptRunner, setupRunner)),
     Layer.provide(
       Layer.succeed(TaskWorkspaceService.TaskWorkspaceService, {
@@ -1345,11 +1350,19 @@ it.effect("registers all coordination handlers with their mutation annotations",
         server.tools.map(({ tool }) => [tool.name, tool.annotations]),
       );
 
-      expect(Object.keys(tools).sort()).toEqual([
-        "task_send_message",
-        "task_spawn_thread",
-        "task_wait_for_threads",
-      ]);
+      expect(Object.keys(tools)).toEqual(
+        expect.arrayContaining([
+          "task_create_pull_request",
+          "task_send_message",
+          "task_spawn_thread",
+          "task_wait_for_threads",
+        ]),
+      );
+      expect(tools.task_create_pull_request).toMatchObject({
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+      });
       expect(tools.task_spawn_thread).toMatchObject({
         readOnlyHint: false,
         destructiveHint: false,
@@ -1386,6 +1399,10 @@ it.effect("capability-gates every coordination handler with a typed task error",
         {
           name: "task_wait_for_threads" as const,
           arguments: { threadIds: [childThreadId], waitMs: 0 },
+        },
+        {
+          name: "task_create_pull_request" as const,
+          arguments: { threadId: childThreadId },
         },
       ];
 
@@ -1427,6 +1444,10 @@ it.effect("rejects malformed coordination inputs before invoking handlers", () =
         yield* server.callTool({
           name: "task_wait_for_threads",
           arguments: { threadIds: [], waitMs: 0 },
+        }),
+        yield* server.callTool({
+          name: "task_create_pull_request",
+          arguments: { threadId: "" },
         }),
       ];
 
@@ -1485,6 +1506,104 @@ it.effect("spawns a durable agent thread with the exact caller message", () => {
       }
     }),
   ).pipe(Effect.provide(makeCoordinationTestLayer(dispatchedCommands)));
+});
+
+it.effect("creates a pull request through the target thread checkout", () => {
+  const dispatchedCommands: Array<import("@t3tools/contracts").OrchestrationCommand> = [];
+  const readyChild = {
+    ...child,
+    latestTurn: child.latestTurn
+      ? {
+          ...child.latestTurn,
+          state: "completed" as const,
+          completedAt: createdAt,
+        }
+      : null,
+  };
+  const actionInputs: Array<import("@t3tools/contracts").GitRunStackedActionInput> = [];
+  const readyQuery = {
+    ...query,
+    getShellSnapshot: () =>
+      query
+        .getShellSnapshot()
+        .pipe(Effect.map((snapshot) => ({ ...snapshot, threads: [caller, readyChild] }))),
+    getThreadShellById: (threadId: ThreadId) =>
+      Effect.succeed(
+        Option.fromNullishOr([caller, readyChild].find((candidate) => candidate.id === threadId)),
+      ),
+  } as unknown as ProjectionSnapshotQuery.ProjectionSnapshotQuery["Service"];
+  const gitManager = {
+    runStackedAction: (input: import("@t3tools/contracts").GitRunStackedActionInput) =>
+      Effect.sync(() => {
+        actionInputs.push(input);
+        return {
+          action: "create_pr" as const,
+          branch: { status: "skipped_not_requested" as const },
+          commit: { status: "skipped_not_requested" as const },
+          push: { status: "pushed" as const },
+          pr: {
+            status: "created" as const,
+            url: "https://example.test/pull/42",
+            number: 42,
+            baseBranch: "main",
+            headBranch: "feature/api",
+            title: "Ship API",
+          },
+          toast: {
+            title: "Pull request created",
+            cta: {
+              kind: "open_pr" as const,
+              label: "Open pull request",
+              url: "https://example.test/pull/42",
+            },
+          },
+        };
+      }),
+  } as unknown as GitManager.GitManager["Service"];
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const result = yield* server
+        .callTool({
+          name: "task_create_pull_request",
+          arguments: { threadId: childThreadId },
+        })
+        .pipe(
+          Effect.provideService(
+            McpInvocationContext.McpInvocationContext,
+            invocation(new Set(["task"])),
+          ),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+
+      expect(result.isError).toBe(false);
+      expect(actionInputs).toEqual([
+        {
+          actionId: expect.stringMatching(/^task:pr:/),
+          cwd: "/tmp/task/worktrees/child-api",
+          action: "create_pr",
+        },
+      ]);
+      expect(result.structuredContent).toMatchObject({
+        threadId: childThreadId,
+        status: "created",
+        url: "https://example.test/pull/42",
+        number: 42,
+      });
+    }),
+  ).pipe(
+    Effect.provide(
+      makeCoordinationTestLayer(
+        dispatchedCommands,
+        readyQuery,
+        {} as GitWorkflowService.GitWorkflowService["Service"],
+        undefined,
+        {} as ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"],
+        gitManager,
+      ),
+    ),
+  );
 });
 
 it.effect("resolves HEAD to a stable branch before creating a repository worktree", () => {
