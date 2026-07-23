@@ -96,6 +96,7 @@ import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
+import * as TaskWorkspaceService from "./tasks/TaskWorkspaceService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
@@ -428,6 +429,7 @@ const makeWsRpcLayer = (
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const repositoryIdentityResolver =
         yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
+      const taskWorkspace = yield* TaskWorkspaceService.TaskWorkspaceService;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
       const sourceControlDiscovery = yield* SourceControlDiscovery.SourceControlDiscovery;
@@ -867,6 +869,38 @@ const makeWsRpcLayer = (
           let targetProjectId = bootstrap?.createThread?.projectId;
           let targetProjectCwd = bootstrap?.prepareWorktree?.projectCwd;
           let targetWorktreePath = bootstrap?.createThread?.worktreePath ?? null;
+          let createdWorktreePath: string | null = null;
+
+          const loadTaskWorkspaceContext = (taskId: TaskId) =>
+            projectionSnapshotQuery.getShellSnapshot().pipe(
+              Effect.mapError((cause) =>
+                toDispatchCommandError(cause, "Failed to load task workspace context."),
+              ),
+              Effect.flatMap((snapshot) => {
+                const task = snapshot.tasks?.find((candidate) => candidate.id === taskId);
+                if (!task) {
+                  return Effect.fail(
+                    new OrchestrationDispatchCommandError({
+                      message: `Task ${taskId} was not found while preparing its workspace.`,
+                      cause: { taskId },
+                    }),
+                  );
+                }
+                return Effect.succeed({
+                  task,
+                  projects: snapshot.projects,
+                  threads: snapshot.threads,
+                });
+              }),
+            );
+
+          const refreshTaskWorkspace = (taskId: TaskId) =>
+            loadTaskWorkspaceContext(taskId).pipe(
+              Effect.flatMap(taskWorkspace.prepare),
+              Effect.mapError((cause) =>
+                toDispatchCommandError(cause, "Failed to prepare task workspace."),
+              ),
+            );
 
           const cleanupCreatedThread = () =>
             createdThread
@@ -880,6 +914,16 @@ const makeWsRpcLayer = (
                   ),
                   Effect.ignoreCause({ log: true }),
                 )
+              : Effect.void;
+
+          const cleanupCreatedWorktree = () =>
+            createdWorktreePath && targetProjectCwd
+              ? gitWorkflow
+                  .removeWorktree({
+                    cwd: targetProjectCwd,
+                    path: createdWorktreePath,
+                  })
+                  .pipe(Effect.ignoreCause({ log: true }))
               : Effect.void;
 
           const recordSetupScriptLaunchFailure = (input: {
@@ -998,6 +1042,19 @@ const makeWsRpcLayer = (
             });
 
           const bootstrapProgram = Effect.gen(function* () {
+            const taskId = bootstrap?.createThread?.taskId;
+            const taskContext = taskId ? yield* loadTaskWorkspaceContext(taskId) : null;
+
+            if (taskContext) {
+              yield* taskWorkspace
+                .prepare(taskContext)
+                .pipe(
+                  Effect.mapError((cause) =>
+                    toDispatchCommandError(cause, "Failed to prepare task workspace."),
+                  ),
+                );
+            }
+
             if (bootstrap?.createThread) {
               yield* orchestrationEngine.dispatch({
                 type: "thread.create",
@@ -1010,6 +1067,7 @@ const makeWsRpcLayer = (
                 interactionMode: bootstrap.createThread.interactionMode,
                 branch: bootstrap.createThread.branch,
                 worktreePath: bootstrap.createThread.worktreePath,
+                ...(bootstrap.createThread.taskId ? { taskId: bootstrap.createThread.taskId } : {}),
                 createdAt: bootstrap.createThread.createdAt,
               });
               createdThread = true;
@@ -1029,14 +1087,26 @@ const makeWsRpcLayer = (
                 });
                 worktreeBaseRef = resolvedRemoteBase.commitSha;
               }
+              const projectTitle =
+                taskContext?.projects.find((project) => project.id === targetProjectId)?.title ??
+                targetProjectId ??
+                "repository";
+              const managedPath = taskContext
+                ? taskWorkspace.managedWorktreePath({
+                    taskRoot: taskContext.task.rootPath,
+                    threadId: command.threadId,
+                    projectTitle,
+                  })
+                : null;
               const worktree = yield* gitWorkflow.createWorktree({
                 cwd: bootstrap.prepareWorktree.projectCwd,
                 refName: worktreeBaseRef,
                 newRefName: bootstrap.prepareWorktree.branch,
                 baseRefName: bootstrap.prepareWorktree.baseBranch,
-                path: null,
+                path: managedPath,
               });
               targetWorktreePath = worktree.worktree.path;
+              createdWorktreePath = targetWorktreePath;
               yield* orchestrationEngine.dispatch({
                 type: "thread.meta.update",
                 commandId: yield* serverCommandId("bootstrap-thread-meta-update"),
@@ -1045,6 +1115,10 @@ const makeWsRpcLayer = (
                 worktreePath: targetWorktreePath,
               });
               yield* refreshGitStatus(targetWorktreePath);
+            }
+
+            if (taskId) {
+              yield* refreshTaskWorkspace(taskId);
             }
 
             yield* runSetupProgram();
@@ -1058,7 +1132,10 @@ const makeWsRpcLayer = (
               if (Cause.hasInterruptsOnly(cause)) {
                 return Effect.fail(dispatchError);
               }
-              return cleanupCreatedThread().pipe(Effect.flatMap(() => Effect.fail(dispatchError)));
+              return cleanupCreatedWorktree().pipe(
+                Effect.andThen(cleanupCreatedThread()),
+                Effect.flatMap(() => Effect.fail(dispatchError)),
+              );
             }),
           );
         });

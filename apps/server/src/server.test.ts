@@ -27,6 +27,7 @@ import {
   ProviderInstanceId,
   ResolvedKeybindingRule,
   ThreadId,
+  TaskId,
   WS_METHODS,
   WsRpcGroup,
   EditorId,
@@ -94,6 +95,7 @@ import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
+import * as TaskWorkspaceService from "./tasks/TaskWorkspaceService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
@@ -808,6 +810,7 @@ const buildAppUnderTest = (options?: {
       Layer.provideMerge(makeAuthTestLayer()),
       Layer.provideMerge(ServerSecretStore.layer),
       Layer.provide(workspaceAndProjectServicesLayer),
+      Layer.provide(TaskWorkspaceService.TaskWorkspaceServiceLive),
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provide(layerConfig),
     );
@@ -7029,6 +7032,131 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("places task bootstrap worktrees under the persisted task root", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const taskRoot = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-task-bootstrap-",
+      });
+      const taskId = TaskId.make("task-bootstrap");
+      const threadId = ThreadId.make("thread-task-bootstrap");
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const createWorktree = vi.fn(
+        (input: Parameters<GitVcsDriver.GitVcsDriver["Service"]["createWorktree"]>[0]) =>
+          Effect.succeed({
+            worktree: {
+              refName: "t3code/task-bootstrap",
+              path: input.path ?? "/tmp/unmanaged-worktree",
+            },
+          }),
+      );
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+
+      yield* buildAppUnderTest({
+        layers: {
+          gitVcsDriver: {
+            createWorktree,
+          },
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatchedCommands.push(command);
+                return { sequence: dispatchedCommands.length };
+              }),
+            readEvents: () => Stream.empty,
+          },
+          projectionSnapshotQuery: {
+            getShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: 1,
+                tasks: [
+                  {
+                    id: taskId,
+                    title: "Coordinate repositories",
+                    status: "active",
+                    rootPath: taskRoot,
+                    workspaceProjectId: ProjectId.make("project-task-bootstrap"),
+                    approvedProjectIds: [defaultProjectId],
+                    createdAt,
+                    updatedAt: createdAt,
+                    completedAt: null,
+                  },
+                ],
+                projects: [
+                  {
+                    id: defaultProjectId,
+                    title: "T3 Code Web",
+                    workspaceRoot: "/tmp/project",
+                    defaultModelSelection: null,
+                    scripts: [],
+                    createdAt,
+                    updatedAt: createdAt,
+                  },
+                ],
+                threads: [],
+                updatedAt: createdAt,
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const response = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-task-bootstrap"),
+            threadId,
+            message: {
+              messageId: MessageId.make("msg-task-bootstrap"),
+              role: "user",
+              text: "coordinate this repository",
+              attachments: [],
+            },
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            bootstrap: {
+              createThread: {
+                projectId: defaultProjectId,
+                title: "Task repository thread",
+                modelSelection: defaultModelSelection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: "main",
+                worktreePath: null,
+                taskId,
+                createdAt,
+              },
+              prepareWorktree: {
+                projectCwd: "/tmp/project",
+                baseBranch: "main",
+                branch: "t3code/task-bootstrap",
+              },
+              runSetupScript: false,
+            },
+            createdAt,
+          }),
+        ),
+      );
+
+      assert.equal(response.sequence, 3);
+      const expectedWorktreePath = path.join(
+        taskRoot,
+        "worktrees",
+        "thread-task-bootstrap-t3-code-web",
+      );
+      assert.equal(createWorktree.mock.calls[0]?.[0].path, expectedWorktreePath);
+      const createThreadCommand = dispatchedCommands[0];
+      assertTrue(createThreadCommand?.type === "thread.create");
+      if (createThreadCommand?.type === "thread.create") {
+        assert.equal(createThreadCommand.taskId, taskId);
+      }
+      assert.equal(yield* fileSystem.exists(path.join(taskRoot, "TASK.md")), true);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("does not misattribute setup activity dispatch failures as setup launch failures", () =>
     Effect.gen(function* () {
       const dispatchedCommands: Array<OrchestrationCommand> = [];
@@ -7222,6 +7350,89 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.deepEqual(
         dispatchedCommands.map((command) => command.type),
         ["thread.create", "thread.delete"],
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("removes a created bootstrap worktree when a later bootstrap step fails", () =>
+    Effect.gen(function* () {
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+      const removeWorktree = vi.fn(
+        (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["removeWorktree"]>[0]) => Effect.void,
+      );
+
+      yield* buildAppUnderTest({
+        layers: {
+          gitVcsDriver: {
+            createWorktree: () =>
+              Effect.succeed({
+                worktree: {
+                  refName: "t3code/bootstrap-cleanup",
+                  path: "/tmp/bootstrap-cleanup-worktree",
+                },
+              }),
+            removeWorktree,
+          },
+          orchestrationEngine: {
+            dispatch: (command) => {
+              dispatchedCommands.push(command);
+              return command.type === "thread.turn.start"
+                ? Effect.die(new Error("turn start exploded"))
+                : Effect.succeed({ sequence: dispatchedCommands.length });
+            },
+            readEvents: () => Stream.empty,
+          },
+        },
+      });
+
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-bootstrap-cleanup"),
+            threadId: ThreadId.make("thread-bootstrap-cleanup"),
+            message: {
+              messageId: MessageId.make("msg-bootstrap-cleanup"),
+              role: "user",
+              text: "hello",
+              attachments: [],
+            },
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            bootstrap: {
+              createThread: {
+                projectId: defaultProjectId,
+                title: "Bootstrap cleanup",
+                modelSelection: defaultModelSelection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: "main",
+                worktreePath: null,
+                createdAt,
+              },
+              prepareWorktree: {
+                projectCwd: "/tmp/project",
+                baseBranch: "main",
+                branch: "t3code/bootstrap-cleanup",
+              },
+              runSetupScript: false,
+            },
+            createdAt,
+          }),
+        ).pipe(Effect.result),
+      );
+
+      assertTrue(result._tag === "Failure");
+      assert.deepEqual(removeWorktree.mock.calls[0]?.[0], {
+        cwd: "/tmp/project",
+        path: "/tmp/bootstrap-cleanup-worktree",
+      });
+      assert.deepEqual(
+        dispatchedCommands.map((command) => command.type),
+        ["thread.create", "thread.meta.update", "thread.turn.start", "thread.delete"],
       );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
