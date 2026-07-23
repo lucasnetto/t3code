@@ -1412,6 +1412,12 @@ function ChatViewContent(props: ChatViewProps) {
     composerInteractionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
   const isTaskDraft = isLocalDraftThread && draftThread?.taskDraft !== undefined;
+  const taskDraftTargetProjectId =
+    draftThread?.taskDraft?.targetProjectId ?? draftThread?.taskDraft?.workspaceProjectId;
+  const isTaskRepositoryDraft =
+    isTaskDraft &&
+    taskDraftTargetProjectId !== undefined &&
+    taskDraftTargetProjectId !== draftThread?.taskDraft?.workspaceProjectId;
   const activeTaskRef =
     activeThread?.taskContext === undefined
       ? null
@@ -1685,6 +1691,15 @@ function ChatViewContent(props: ChatViewProps) {
     }
     await createTaskThread(activeTask);
   }, [activeTask, createTaskThread]);
+  const handleCreateTaskRepositoryThread = useCallback(
+    async (project: EnvironmentProject) => {
+      if (activeTask === null) {
+        return;
+      }
+      await createTaskThread(activeTask, project);
+    },
+    [activeTask, createTaskThread],
+  );
   const primaryEnvironmentId = primaryEnvironment?.environmentId ?? null;
   const activeEnvironment =
     activeThread == null ? null : (environmentById.get(activeThread.environmentId) ?? null);
@@ -4587,12 +4602,16 @@ function ChatViewContent(props: ChatViewProps) {
               ...(isLocalDraftThread
                 ? {
                     createThread: {
-                      projectId: taskDraft?.workspaceProjectId ?? activeProject.id,
+                      projectId: taskDraftTargetProjectId ?? activeProject.id,
                       title,
                       modelSelection: threadCreateModelSelection,
                       runtimeMode,
                       interactionMode,
-                      branch: taskDraft ? null : activeThreadBranch,
+                      branch: isTaskRepositoryDraft
+                        ? activeThreadBranch
+                        : taskDraft
+                          ? null
+                          : activeThreadBranch,
                       worktreePath: taskDraft ? null : activeThread.worktreePath,
                       ...(taskDraft ? { taskId: taskDraft.taskId } : {}),
                       createdAt: activeThread.createdAt,
@@ -5500,7 +5519,11 @@ function ChatViewContent(props: ChatViewProps) {
             activeThreadId={activeThread.id}
             {...(routeKind === "draft" && draftId ? { draftId } : {})}
             activeThreadTitle={activeThread.title}
-            activeProjectName={draftThread?.taskDraft?.title ?? activeProject?.title}
+            activeProjectName={
+              isTaskRepositoryDraft
+                ? activeProject?.title
+                : (draftThread?.taskDraft?.title ?? activeProject?.title)
+            }
             activeProjectCwd={
               agentCreatedTaskThread || isTaskDraft ? null : (activeProject?.workspaceRoot ?? null)
             }
@@ -5798,7 +5821,7 @@ function ChatViewContent(props: ChatViewProps) {
                               : "pb-[calc(env(safe-area-inset-bottom)+0.75rem)] sm:pb-[calc(env(safe-area-inset-bottom)+1rem)]",
                           )}
                         >
-                          {isGitRepo && !isTaskDraft && (
+                          {isGitRepo && (!isTaskDraft || isTaskRepositoryDraft) && (
                             <div className="pointer-events-auto">
                               <BranchToolbar
                                 environmentId={activeThread.environmentId}
@@ -5952,6 +5975,7 @@ function ChatViewContent(props: ChatViewProps) {
           onUpdateTitle={handleUpdateTaskTitle}
           onApproveProject={handleApproveTaskProject}
           onCreateThread={handleCreateTaskThread}
+          onCreateRepositoryThread={handleCreateTaskRepositoryThread}
         />
       ) : null}
     </div>

@@ -68,6 +68,7 @@ export const TaskDraftContext = Schema.Struct({
   workspaceProjectId: ProjectId,
   approvedProjectIds: Schema.Array(ProjectId),
   createTask: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  targetProjectId: Schema.optionalKey(ProjectId),
 });
 export type TaskDraftContext = typeof TaskDraftContext.Type;
 const isTaskDraftContext = Schema.is(TaskDraftContext);

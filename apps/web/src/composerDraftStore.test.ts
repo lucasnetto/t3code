@@ -804,6 +804,7 @@ describe("composerDraftStore project draft thread mapping", () => {
         title: "Ship payments",
         workspaceProjectId,
         approvedProjectIds: [projectId, otherProjectId, thirdProjectId],
+        createTask: true,
       },
       anchorProjectId: projectId,
       availableProjectIds: [otherProjectId, thirdProjectId],
@@ -815,6 +816,7 @@ describe("composerDraftStore project draft thread mapping", () => {
         title: "Ship payments",
         workspaceProjectId,
         approvedProjectIds: [otherProjectId, thirdProjectId],
+        createTask: true,
       },
       anchorProjectId: otherProjectId,
       changed: true,
@@ -832,6 +834,7 @@ describe("composerDraftStore project draft thread mapping", () => {
         title: "Ship payments",
         workspaceProjectId,
         approvedProjectIds: [projectId, otherProjectId],
+        createTask: true,
       },
     });
     store.setPrompt(draftId, "Keep this prompt");
@@ -877,6 +880,7 @@ describe("composerDraftStore project draft thread mapping", () => {
           title: "Ship payments",
           workspaceProjectId,
           approvedProjectIds: [projectId],
+          createTask: true,
         },
         anchorProjectId: projectId,
         availableProjectIds: [newlyVisibleProjectId],
@@ -887,9 +891,35 @@ describe("composerDraftStore project draft thread mapping", () => {
         title: "Ship payments",
         workspaceProjectId,
         approvedProjectIds: [],
+        createTask: true,
       },
       anchorProjectId: null,
       changed: true,
+    });
+  });
+
+  it("keeps a repository target with an additional task thread draft", () => {
+    const store = useComposerDraftStore.getState();
+    const taskId = TaskId.make("task-existing");
+    const workspaceProjectId = ProjectId.make("project-task-existing");
+
+    store.setLogicalProjectDraftThreadId("task-thread-draft", otherProjectRef, draftId, {
+      threadId,
+      envMode: "worktree",
+      taskDraft: {
+        taskId,
+        title: "Ship payments",
+        workspaceProjectId,
+        approvedProjectIds: [projectId, otherProjectId],
+        createTask: false,
+        targetProjectId: otherProjectId,
+      },
+    });
+
+    expect(useComposerDraftStore.getState().getDraftSession(draftId)?.taskDraft).toMatchObject({
+      taskId,
+      createTask: false,
+      targetProjectId: otherProjectId,
     });
   });
 
