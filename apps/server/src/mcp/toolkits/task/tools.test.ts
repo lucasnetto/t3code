@@ -12,6 +12,7 @@ import {
   type OrchestrationThreadShell,
 } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -19,7 +20,11 @@ import { McpSchema, McpServer } from "effect/unstable/ai";
 
 import * as CheckpointDiffQuery from "../../../checkpointing/CheckpointDiffQuery.ts";
 import { CheckpointRefUnavailableError } from "../../../checkpointing/Errors.ts";
+import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
+import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ProjectSetupScriptRunner from "../../../project/ProjectSetupScriptRunner.ts";
+import * as TaskWorkspaceService from "../../../tasks/TaskWorkspaceService.ts";
 import * as McpHttpServer from "../../McpHttpServer.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { __testing } from "./handlers.ts";
@@ -58,23 +63,29 @@ const thread = (
   interactionMode: "default",
   branch: id === childThreadId ? "feature/api" : null,
   worktreePath: id === childThreadId ? "/tmp/task/worktrees/child-api" : null,
-  latestTurn:
-    id === childThreadId
-      ? {
-          turnId: TurnId.make("turn-child"),
-          state: "running",
-          requestedAt: createdAt,
-          startedAt: createdAt,
-          completedAt: null,
-          assistantMessageId: null,
-        }
-      : null,
+  latestTurn: {
+    turnId: TurnId.make(id === childThreadId ? "turn-child" : "turn-caller"),
+    state: "running",
+    requestedAt: createdAt,
+    startedAt: createdAt,
+    completedAt: null,
+    assistantMessageId: null,
+  },
   createdAt,
   updatedAt: createdAt,
   archivedAt: options.archivedAt ?? null,
   settledOverride: null,
   settledAt: null,
-  session: null,
+  session: {
+    threadId: id,
+    status: "running",
+    providerName: "codex",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    runtimeMode: "full-access",
+    activeTurnId: TurnId.make(id === childThreadId ? "turn-child" : "turn-caller"),
+    lastError: null,
+    updatedAt: createdAt,
+  },
   latestUserMessageAt: null,
   hasPendingApprovals: false,
   hasPendingUserInput: false,
@@ -189,6 +200,7 @@ const query = {
           scripts: [],
           createdAt,
           updatedAt: createdAt,
+          visibility: "internal-task" as const,
         },
       ],
       threads: [caller, child, archived, crossTask],
@@ -215,6 +227,43 @@ const makeTestLayer = (checkpointDiffQuery: CheckpointDiffQuery.CheckpointDiffQu
   );
 
 const TestLayer = makeTestLayer(successfulCheckpointDiffQuery);
+
+const makeCoordinationTestLayer = (
+  dispatchedCommands: Array<import("@t3tools/contracts").OrchestrationCommand>,
+) =>
+  McpHttpServer.TaskCoordinationToolkitRegistrationLive.pipe(
+    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provide(Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, query)),
+    Layer.provide(
+      Layer.succeed(OrchestrationEngine.OrchestrationEngineService, {
+        dispatch: (command: import("@t3tools/contracts").OrchestrationCommand) =>
+          Effect.sync(() => {
+            dispatchedCommands.push(command);
+            return { sequence: dispatchedCommands.length };
+          }),
+      } as unknown as OrchestrationEngine.OrchestrationEngineService["Service"]),
+    ),
+    Layer.provide(
+      Layer.succeed(
+        GitWorkflowService.GitWorkflowService,
+        {} as GitWorkflowService.GitWorkflowService["Service"],
+      ),
+    ),
+    Layer.provide(
+      Layer.succeed(
+        ProjectSetupScriptRunner.ProjectSetupScriptRunner,
+        {} as ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"],
+      ),
+    ),
+    Layer.provide(
+      Layer.succeed(TaskWorkspaceService.TaskWorkspaceService, {
+        newTaskRoot: () => "/tmp/task",
+        managedWorktreePath: () => "/tmp/task/worktrees/unused",
+        prepare: () => Effect.void,
+      }),
+    ),
+    Layer.provide(NodeServices.layer),
+  );
 
 const client = McpSchema.McpServerClient.of({
   clientId: 1,
@@ -280,7 +329,7 @@ it.effect("lists only approved repositories and active same-task threads", () =>
             target: { kind: "task-root" },
             title: "Coordinator",
             origin: { kind: "user" },
-            status: "idle",
+            status: "working",
             branch: null,
             worktreePath: null,
             updatedAt: createdAt,
@@ -321,7 +370,7 @@ it.effect("lists only approved repositories and active same-task threads", () =>
         target: { kind: "task-root" },
         title: "Coordinator",
         origin: { kind: "user" },
-        status: "idle",
+        status: "working",
         branch: null,
         worktreePath: null,
         updatedAt: createdAt,
@@ -1015,7 +1064,7 @@ it.effect("maps each projected thread state to its task status", () =>
   Effect.sync(() => {
     const latestTurn = child.latestTurn;
     expect(latestTurn).not.toBeNull();
-    expect(__testing.statusForThread(caller)).toBe("idle");
+    expect(__testing.statusForThread(caller)).toBe("working");
     expect(__testing.statusForThread(child)).toBe("working");
     expect(
       __testing.statusForThread({
@@ -1039,10 +1088,14 @@ it.effect("maps each projected thread state to its task status", () =>
     expect(
       __testing.statusForThread({
         ...caller,
+        latestTurn: caller.latestTurn
+          ? { ...caller.latestTurn, state: "completed", completedAt: createdAt }
+          : null,
         session: {
           threadId: callerThreadId,
           status: "error",
           providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
           runtimeMode: "full-access",
           activeTurnId: null,
           lastError: "provider failed",
@@ -1217,3 +1270,46 @@ it.effect("clamps transcript page limits to the documented bounds", () =>
     expect(__testing.transcriptLimit(16_001)).toBe(16_000);
   }),
 );
+
+it.effect("spawns a durable agent thread with the exact caller message", () => {
+  const dispatchedCommands: Array<import("@t3tools/contracts").OrchestrationCommand> = [];
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const result = yield* server
+        .callTool({
+          name: "task_spawn_thread",
+          arguments: {
+            message: "Investigate the failing integration\nDo not change unrelated files.",
+          },
+        })
+        .pipe(
+          Effect.provideService(
+            McpInvocationContext.McpInvocationContext,
+            invocation(new Set(["task"])),
+          ),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+
+      expect(result.isError).toBe(false);
+      expect(dispatchedCommands.map((command) => command.type)).toEqual([
+        "thread.agent.create",
+        "thread.turn.start",
+      ]);
+      const create = dispatchedCommands[0];
+      expect(create?.type).toBe("thread.agent.create");
+      if (create?.type === "thread.agent.create") {
+        expect(create.spawningThreadId).toBe(callerThreadId);
+        expect(create.spawningTurnId).toBe(TurnId.make("turn-caller"));
+        expect(create.projectId).toBe(ProjectId.make("project-task"));
+      }
+      const turn = dispatchedCommands[1];
+      expect(turn?.type).toBe("thread.turn.start");
+      if (turn?.type === "thread.turn.start") {
+        expect(turn.message.text).toBe(
+          "Investigate the failing integration\nDo not change unrelated files.",
+        );
+      }
+    }),
+  ).pipe(Effect.provide(makeCoordinationTestLayer(dispatchedCommands)));
+});

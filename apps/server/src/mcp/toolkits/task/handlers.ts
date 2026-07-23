@@ -4,6 +4,7 @@ import type {
   OrchestrationTask,
   OrchestrationThreadShell,
   ThreadId,
+  TurnId,
 } from "@t3tools/contracts";
 import { IsoDateTime, MessageId, NonNegativeInt, TaskId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -71,13 +72,18 @@ interface ListPage<T> {
   readonly nextCursor: string | null;
 }
 
-interface TaskToolScope {
+export interface TaskToolScope {
   readonly task: OrchestrationTask;
   readonly projects: ReadonlyArray<OrchestrationProjectShell>;
   readonly threads: ReadonlyArray<OrchestrationThreadShell>;
 }
 
-const fail = (operation: string, detail: string) =>
+export interface ActiveTaskMutationScope extends TaskToolScope {
+  readonly caller: OrchestrationThreadShell;
+  readonly activeTurnId: TurnId;
+}
+
+export const failTaskTool = (operation: string, detail: string) =>
   new TaskToolError({
     operation,
     detail,
@@ -123,29 +129,39 @@ function isActiveTaskThread(
   return thread.archivedAt === null && thread.taskContext?.taskId === taskId;
 }
 
-const requireTaskScope = Effect.fn("TaskToolkit.requireScope")(function* (operation: string) {
+export const requireTaskScope = Effect.fn("TaskToolkit.requireScope")(function* (
+  operation: string,
+) {
   const invocation = yield* McpInvocationContext.McpInvocationContext;
   if (!invocation.capabilities.has("task")) {
-    return yield* fail(operation, "This provider session does not have task orchestration access.");
+    return yield* failTaskTool(
+      operation,
+      "This provider session does not have task orchestration access.",
+    );
   }
   const query = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const caller = yield* query
     .getThreadShellById(invocation.threadId)
-    .pipe(Effect.mapError(() => fail(operation, "Could not resolve the calling task thread.")));
+    .pipe(
+      Effect.mapError(() => failTaskTool(operation, "Could not resolve the calling task thread.")),
+    );
   if (
     Option.isNone(caller) ||
     caller.value.archivedAt !== null ||
     caller.value.taskContext?.createdBy.kind !== "user"
   ) {
-    return yield* fail(operation, "Task tools require a user-created thread in an active task.");
+    return yield* failTaskTool(
+      operation,
+      "Task tools require a user-created thread in an active task.",
+    );
   }
   const snapshot = yield* query
     .getShellSnapshot()
-    .pipe(Effect.mapError(() => fail(operation, "Could not load the current task.")));
+    .pipe(Effect.mapError(() => failTaskTool(operation, "Could not load the current task.")));
   const taskId = caller.value.taskContext.taskId;
   const task = snapshot.tasks?.find((candidate) => candidate.id === taskId);
   if (!task || task.status !== "active") {
-    return yield* fail(operation, `Task '${taskId}' is not active.`);
+    return yield* failTaskTool(operation, `Task '${taskId}' is not active.`);
   }
   return {
     task,
@@ -154,7 +170,31 @@ const requireTaskScope = Effect.fn("TaskToolkit.requireScope")(function* (operat
   } satisfies TaskToolScope;
 });
 
-function statusForThread(
+export const requireActiveTaskMutationScope = Effect.fn("TaskToolkit.requireActiveMutationScope")(
+  function* (operation: string) {
+    const scope = yield* requireTaskScope(operation);
+    const invocation = yield* McpInvocationContext.McpInvocationContext;
+    const caller = yield* requireTaskThread(scope, invocation.threadId, operation);
+    const activeTurnId = caller.session?.activeTurnId;
+    if (
+      caller.session?.status !== "running" ||
+      activeTurnId === null ||
+      activeTurnId === undefined
+    ) {
+      return yield* failTaskTool(
+        operation,
+        "The calling thread must have a running provider session with an active turn.",
+      );
+    }
+    return {
+      ...scope,
+      caller,
+      activeTurnId,
+    } satisfies ActiveTaskMutationScope;
+  },
+);
+
+export function statusForThread(
   thread: OrchestrationThreadShell,
 ): "idle" | "working" | "approval" | "input" | "failed" | "ready" {
   if (thread.hasPendingApprovals) return "approval";
@@ -165,7 +205,7 @@ function statusForThread(
   return "idle";
 }
 
-function summary(thread: OrchestrationThreadShell, task: OrchestrationTask) {
+export function taskThreadSummary(thread: OrchestrationThreadShell, task: OrchestrationTask) {
   const createdBy = thread.taskContext?.createdBy;
   return {
     threadId: thread.id,
@@ -189,7 +229,7 @@ function summary(thread: OrchestrationThreadShell, task: OrchestrationTask) {
   };
 }
 
-function requireThread(
+export function requireTaskThread(
   scope: TaskToolScope,
   threadId: ThreadId,
   operation: string,
@@ -197,7 +237,7 @@ function requireThread(
   const thread = scope.threads.find((candidate) => candidate.id === threadId);
   return thread
     ? Effect.succeed(thread)
-    : Effect.fail(fail(operation, `Thread '${threadId}' is outside the current task.`));
+    : Effect.fail(failTaskTool(operation, `Thread '${threadId}' is outside the current task.`));
 }
 
 function decodeCursor(
@@ -207,11 +247,11 @@ function decodeCursor(
   if (!cursor) return Effect.succeed(Option.none());
   return Effect.try({
     try: () => Buffer.from(cursor, "base64url").toString("utf8"),
-    catch: () => fail(operation, "The transcript cursor is invalid."),
+    catch: () => failTaskTool(operation, "The transcript cursor is invalid."),
   }).pipe(
     Effect.flatMap(decodeTranscriptCursorJson),
     Effect.map(Option.some),
-    Effect.mapError(() => fail(operation, "The transcript cursor is invalid.")),
+    Effect.mapError(() => failTaskTool(operation, "The transcript cursor is invalid.")),
   );
 }
 
@@ -264,7 +304,7 @@ const paginateTranscript = Effect.fn("TaskToolkit.paginateTranscript")(function*
       cursorMessage.updatedAt !== decodedCursor.value.messageUpdatedAt ||
       decodedCursor.value.characterOffset > cursorMessage.text.length
     ) {
-      return yield* fail(operation, "The transcript cursor is stale.");
+      return yield* failTaskTool(operation, "The transcript cursor is stale.");
     }
   }
 
@@ -335,11 +375,11 @@ function decodeListCursor(
   if (!cursor) return Effect.succeed(Option.none());
   return Effect.try({
     try: () => Buffer.from(cursor, "base64url").toString("utf8"),
-    catch: () => fail(operation, "The list cursor is invalid."),
+    catch: () => failTaskTool(operation, "The list cursor is invalid."),
   }).pipe(
     Effect.flatMap(decodeListCursorJson),
     Effect.map(Option.some),
-    Effect.mapError(() => fail(operation, "The list cursor is invalid.")),
+    Effect.mapError(() => failTaskTool(operation, "The list cursor is invalid.")),
   );
 }
 
@@ -362,11 +402,11 @@ const paginateList = Effect.fn("TaskToolkit.paginateList")(function* <T>(
   if (Option.isSome(decodedCursor)) {
     const decoded = decodedCursor.value;
     if (decoded.taskId !== taskId || decoded.collection !== collection) {
-      return yield* fail(operation, "The list cursor is invalid.");
+      return yield* failTaskTool(operation, "The list cursor is invalid.");
     }
     const anchor = items[decoded.anchorIndex];
     if (!anchor || itemId(anchor) !== decoded.anchorId) {
-      return yield* fail(operation, "The list cursor is stale.");
+      return yield* failTaskTool(operation, "The list cursor is stale.");
     }
     startIndex = decoded.anchorIndex + 1;
   }
@@ -379,7 +419,7 @@ const paginateList = Effect.fn("TaskToolkit.paginateList")(function* <T>(
 
   const anchor = page.at(-1);
   if (!anchor) {
-    return yield* fail(operation, "The list cursor did not advance.");
+    return yield* failTaskTool(operation, "The list cursor did not advance.");
   }
   return {
     items: page,
@@ -433,26 +473,31 @@ const handlers = {
       );
       return {
         taskId: scope.task.id,
-        threads: page.items.map((thread) => summary(thread, scope.task)),
+        threads: page.items.map((thread) => taskThreadSummary(thread, scope.task)),
         nextCursor: page.nextCursor,
       };
     }),
   task_get_thread_status: ({ threadId }) =>
     Effect.gen(function* () {
       const scope = yield* requireTaskScope("task.get_thread_status");
-      return summary(yield* requireThread(scope, threadId, "task.get_thread_status"), scope.task);
+      return taskThreadSummary(
+        yield* requireTaskThread(scope, threadId, "task.get_thread_status"),
+        scope.task,
+      );
     }),
   task_read_thread: ({ threadId, cursor, maxChars }) =>
     Effect.gen(function* () {
       const operation = "task.read_thread";
       const scope = yield* requireTaskScope(operation);
-      yield* requireThread(scope, threadId, operation);
+      yield* requireTaskThread(scope, threadId, operation);
       const query = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
       const detail = yield* query
         .getThreadDetailById(threadId)
-        .pipe(Effect.mapError(() => fail(operation, `Could not read thread '${threadId}'.`)));
+        .pipe(
+          Effect.mapError(() => failTaskTool(operation, `Could not read thread '${threadId}'.`)),
+        );
       if (Option.isNone(detail)) {
-        return yield* fail(operation, `Thread '${threadId}' was not found.`);
+        return yield* failTaskTool(operation, `Thread '${threadId}' was not found.`);
       }
       const page = yield* paginateTranscript(
         detail.value.messages,
@@ -469,7 +514,7 @@ const handlers = {
     Effect.gen(function* () {
       const operation = "task.get_thread_diff";
       const scope = yield* requireTaskScope(operation);
-      const thread = yield* requireThread(scope, threadId, operation);
+      const thread = yield* requireTaskThread(scope, threadId, operation);
       if (!thread.worktreePath) {
         return yield* diffFail(
           "checkout-unavailable",
@@ -479,9 +524,11 @@ const handlers = {
       const query = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
       const detail = yield* query
         .getThreadDetailById(threadId)
-        .pipe(Effect.mapError(() => fail(operation, `Could not inspect thread '${threadId}'.`)));
+        .pipe(
+          Effect.mapError(() => failTaskTool(operation, `Could not inspect thread '${threadId}'.`)),
+        );
       if (Option.isNone(detail)) {
-        return yield* fail(operation, `Thread '${threadId}' was not found.`);
+        return yield* failTaskTool(operation, `Thread '${threadId}' was not found.`);
       }
       const lastTurn = detail.value.checkpoints.reduce(
         (maximum, checkpoint) => Math.max(maximum, checkpoint.checkpointTurnCount),

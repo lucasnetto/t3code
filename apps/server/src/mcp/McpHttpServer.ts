@@ -24,6 +24,8 @@ import {
 } from "./toolkits/preview/tools.ts";
 import { TaskToolkitHandlersLive } from "./toolkits/task/handlers.ts";
 import { TaskToolkit } from "./toolkits/task/tools.ts";
+import { TaskCoordinationToolkitHandlersLive } from "./toolkits/task/coordinationHandlers.ts";
+import { TaskCoordinationToolkit } from "./toolkits/task/coordinationTools.ts";
 
 const unauthorized = HttpServerResponse.jsonUnsafe(
   {
@@ -214,12 +216,18 @@ export const TaskToolkitRegistrationLive = McpServer.toolkit(TaskToolkit).pipe(
   Layer.provide(TaskToolkitHandlersLive),
 );
 
+export const TaskCoordinationToolkitRegistrationLive = McpServer.toolkit(
+  TaskCoordinationToolkit,
+).pipe(Layer.provide(TaskCoordinationToolkitHandlersLive));
+
 const McpTransportLive = McpServer.layerHttp({
   name: "T3 Code",
   version: packageJson.version,
   path: "/mcp",
 }).pipe(Layer.provide(McpAuthMiddlewareLive));
 
-export const layer = Layer.merge(PreviewToolkitRegistrationLive, TaskToolkitRegistrationLive).pipe(
-  Layer.provideMerge(McpTransportLive),
-);
+export const layer = Layer.mergeAll(
+  PreviewToolkitRegistrationLive,
+  TaskToolkitRegistrationLive,
+  TaskCoordinationToolkitRegistrationLive,
+).pipe(Layer.provideMerge(McpTransportLive));
