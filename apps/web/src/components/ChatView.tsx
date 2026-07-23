@@ -31,6 +31,7 @@ import {
   scopeProjectRef,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
+import type { EnvironmentProject } from "@t3tools/client-runtime/state/models";
 import {
   applyClaudePromptEffortPrefix,
   createModelSelection,
@@ -139,7 +140,14 @@ import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import PlanSidebar from "./PlanSidebar";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
-import { BotIcon, ChevronDownIcon, SquareIcon, TriangleAlertIcon, WifiOffIcon } from "lucide-react";
+import {
+  BotIcon,
+  ChevronDownIcon,
+  Settings2Icon,
+  SquareIcon,
+  TriangleAlertIcon,
+  WifiOffIcon,
+} from "lucide-react";
 import { cn, randomHex } from "~/lib/utils";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { stackedThreadToast, toastManager } from "./ui/toast";
@@ -193,12 +201,14 @@ import {
   serverEnvironment,
 } from "../state/server";
 import { terminalEnvironment } from "../state/terminal";
+import { taskEnvironment } from "../state/tasks";
 import { threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
   useProject,
   useProjects,
+  useTask,
   useThread,
   useThreadProposedPlans,
   useThreadRefs,
@@ -263,6 +273,8 @@ import {
   resolveServerConfigVersionMismatch,
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
+import { useNewTaskThreadHandler } from "../hooks/useHandleNewThread";
+import { TaskManagementDialog } from "./TaskManagementDialog";
 
 const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
@@ -1384,6 +1396,19 @@ function ChatViewContent(props: ChatViewProps) {
     composerInteractionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
   const isTaskDraft = isLocalDraftThread && draftThread?.taskDraft !== undefined;
+  const activeTaskRef =
+    activeThread?.taskContext === undefined
+      ? null
+      : {
+          environmentId: activeThread.environmentId,
+          taskId: activeThread.taskContext.taskId,
+        };
+  const activeTask = useTask(activeTaskRef);
+  const createTaskThread = useNewTaskThreadHandler();
+  const approveTaskRepository = useAtomCommand(taskEnvironment.approveRepository, {
+    label: "approve task repository",
+  });
+  const [taskManagementOpen, setTaskManagementOpen] = useState(false);
   const canCheckoutPullRequestIntoThread = isLocalDraftThread && !isTaskDraft;
   const activeThreadId = activeThread?.id ?? null;
   const runningTerminalIds = useThreadRunningTerminalIds({
@@ -1563,6 +1588,34 @@ function ChatViewContent(props: ChatViewProps) {
   // Compute the list of environments this logical project spans, used to
   // drive the environment picker in BranchToolbar.
   const allProjects = useProjects();
+  const taskProjects = useMemo(
+    () =>
+      activeTask === null
+        ? []
+        : allProjects.filter((project) => project.environmentId === activeTask.environmentId),
+    [activeTask, allProjects],
+  );
+  const handleApproveTaskProject = useCallback(
+    async (project: EnvironmentProject) => {
+      if (activeTask === null) {
+        return;
+      }
+      await approveTaskRepository({
+        environmentId: activeTask.environmentId,
+        input: {
+          taskId: activeTask.id,
+          projectId: project.id,
+        },
+      });
+    },
+    [activeTask, approveTaskRepository],
+  );
+  const handleCreateTaskThread = useCallback(async () => {
+    if (activeTask === null) {
+      return;
+    }
+    await createTaskThread(activeTask);
+  }, [activeTask, createTaskThread]);
   const primaryEnvironmentId = primaryEnvironment?.environmentId ?? null;
   const activeEnvironment =
     activeThread == null ? null : (environmentById.get(activeThread.environmentId) ?? null);
@@ -4311,7 +4364,7 @@ function ChatViewContent(props: ChatViewProps) {
       const bootstrap =
         isLocalDraftThread || baseBranchForWorktree
           ? {
-              ...(taskDraft
+              ...(taskDraft?.createTask
                 ? {
                     createTask: {
                       taskId: taskDraft.taskId,
@@ -5251,7 +5304,23 @@ function ChatViewContent(props: ChatViewProps) {
             availableEditors={availableEditors}
             rightPanelOpen={rightPanelOpen}
             gitCwd={gitCwd}
-            gitActionsAvailable={!agentCreatedTaskThread && !isTaskDraft}
+            gitActionsAvailable={
+              !agentCreatedTaskThread &&
+              !isTaskDraft &&
+              activeProject?.id !== activeTask?.workspaceProjectId
+            }
+            taskControls={
+              activeTask && !agentCreatedTaskThread ? (
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  aria-label={`Manage ${activeTask.title}`}
+                  onClick={() => setTaskManagementOpen(true)}
+                >
+                  <Settings2Icon className="size-4" />
+                </Button>
+              ) : undefined
+            }
             onRunProjectScript={runProjectScript}
             onAddProjectScript={saveProjectScript}
             onUpdateProjectScript={updateProjectScript}
@@ -5645,6 +5714,16 @@ function ChatViewContent(props: ChatViewProps) {
           onClose={closeExpandedImage}
         />
       )}
+      {activeTask ? (
+        <TaskManagementDialog
+          open={taskManagementOpen}
+          onOpenChange={setTaskManagementOpen}
+          task={activeTask}
+          projects={taskProjects}
+          onApproveProject={handleApproveTaskProject}
+          onCreateThread={handleCreateTaskThread}
+        />
+      ) : null}
     </div>
   );
 }

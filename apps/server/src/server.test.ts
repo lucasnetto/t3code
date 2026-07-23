@@ -7235,6 +7235,97 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("refreshes generated task context after approving a repository", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const taskRoot = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-task-approval-",
+      });
+      const taskId = TaskId.make("task-approval");
+      const approvedProjectId = ProjectId.make("project-approved");
+      const addedProjectId = ProjectId.make("project-added");
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatchedCommands.push(command);
+                return { sequence: dispatchedCommands.length };
+              }),
+            readEvents: () => Stream.empty,
+          },
+          projectionSnapshotQuery: {
+            getShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: dispatchedCommands.length,
+                tasks: [
+                  {
+                    id: taskId,
+                    title: "Coordinate repositories",
+                    status: "active",
+                    rootPath: taskRoot,
+                    workspaceProjectId: ProjectId.make("project-task-approval"),
+                    approvedProjectIds: dispatchedCommands.some(
+                      (command) => command.type === "task.repository.approve",
+                    )
+                      ? [approvedProjectId, addedProjectId]
+                      : [approvedProjectId],
+                    createdAt,
+                    updatedAt: createdAt,
+                    completedAt: null,
+                  },
+                ],
+                projects: [
+                  {
+                    id: approvedProjectId,
+                    title: "API",
+                    workspaceRoot: "/tmp/api",
+                    defaultModelSelection: null,
+                    scripts: [],
+                    createdAt,
+                    updatedAt: createdAt,
+                  },
+                  {
+                    id: addedProjectId,
+                    title: "Web",
+                    workspaceRoot: "/tmp/web",
+                    defaultModelSelection: null,
+                    scripts: [],
+                    createdAt,
+                    updatedAt: createdAt,
+                  },
+                ],
+                threads: [],
+                updatedAt: createdAt,
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const response = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "task.repository.approve",
+            commandId: CommandId.make("cmd-task-approval"),
+            taskId,
+            projectId: addedProjectId,
+            approvedAt: createdAt,
+          }),
+        ),
+      );
+
+      assert.equal(response.sequence, 1);
+      const context = yield* fileSystem.readFileString(path.join(taskRoot, "TASK.md"));
+      assert.match(context, /API \(`project-approved`\)/);
+      assert.match(context, /Web \(`project-added`\)/);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("creates the task and first user thread before starting provider execution", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

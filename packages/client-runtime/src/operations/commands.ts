@@ -31,6 +31,16 @@ type CommandInput<T extends CommandType> = Omit<
 export type CreateProjectInput = CommandInput<"project.create">;
 export type UpdateProjectInput = CommandInput<"project.meta.update">;
 export type DeleteProjectInput = CommandInput<"project.delete">;
+export type CreateTaskInput = CommandInput<"task.create">;
+export type UpdateTaskInput = Omit<CommandInput<"task.update">, "updatedAt"> & {
+  readonly updatedAt?: string;
+};
+export type ApproveTaskRepositoryInput = Omit<
+  CommandInput<"task.repository.approve">,
+  "approvedAt"
+> & {
+  readonly approvedAt?: string;
+};
 export type CreateThreadInput = CommandInput<"thread.create">;
 export type DeleteThreadInput = CommandInput<"thread.delete">;
 export type ArchiveThreadInput = CommandInput<"thread.archive">;
@@ -112,6 +122,39 @@ export const deleteProject: (input: DeleteProjectInput) => CommandEffect = Effec
     commandId: yield* commandId(input),
   });
 });
+
+export const createTask: (input: CreateTaskInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.createTask",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "task.create",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const updateTask: (input: UpdateTaskInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.updateTask",
+)(function* (input) {
+  return yield* dispatch({
+    ...input,
+    type: "task.update",
+    commandId: yield* commandId(input),
+    updatedAt: input.updatedAt ?? (yield* DateTime.now.pipe(Effect.map(DateTime.formatIso))),
+  });
+});
+
+export const approveTaskRepository: (input: ApproveTaskRepositoryInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.approveTaskRepository")(function* (input) {
+    return yield* dispatch({
+      ...input,
+      type: "task.repository.approve",
+      commandId: yield* commandId(input),
+      approvedAt: input.approvedAt ?? (yield* DateTime.now.pipe(Effect.map(DateTime.formatIso))),
+    });
+  });
 
 export const createThread: (input: CreateThreadInput) => CommandEffect = Effect.fn(
   "EnvironmentCommands.createThread",
