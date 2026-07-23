@@ -41,7 +41,7 @@ const snapshot: OrchestrationShellSnapshot = {
 };
 
 describe("environment project projections", () => {
-  it("keeps internal task projects out of ordinary project collections", () => {
+  it("hides internal task projects from collections while keeping direct lookup available", () => {
     const catalogValueAtom = Atom.make<EnvironmentCatalogState>({
       isReady: true,
       entries: new Map([
@@ -76,6 +76,11 @@ describe("environment project projections", () => {
           projectId: internalProjectId,
         }),
       ),
-    ).toBeNull();
+    ).toMatchObject({
+      environmentId,
+      id: internalProjectId,
+      workspaceRoot: "/tmp/task",
+      visibility: "internal-task",
+    });
   });
 });

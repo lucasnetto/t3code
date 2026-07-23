@@ -21,18 +21,25 @@ export function createEnvironmentProjectAtoms(input: {
     environmentId: EnvironmentId,
   ) => Atom.Atom<OrchestrationShellSnapshot | null>;
 }) {
+  const environmentAllProjectsAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make(
+      (get): ReadonlyArray<OrchestrationProjectShell> =>
+        get(input.snapshotAtom(environmentId))?.projects ?? EMPTY_PROJECTS,
+    ).pipe(Atom.withLabel(`environment-all-projects:${environmentId}`)),
+  );
+
   const environmentProjectsAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make(
       (get): ReadonlyArray<OrchestrationProjectShell> =>
-        get(input.snapshotAtom(environmentId))?.projects.filter(
+        get(environmentAllProjectsAtom(environmentId)).filter(
           (project) => project.visibility !== "internal-task",
-        ) ?? EMPTY_PROJECTS,
+        ),
     ).pipe(Atom.withLabel(`environment-projects:${environmentId}`)),
   );
 
   const environmentProjectIndexAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get): ReadonlyMap<ProjectId, OrchestrationProjectShell> => {
-      const projects = get(environmentProjectsAtom(environmentId));
+      const projects = get(environmentAllProjectsAtom(environmentId));
       if (projects.length === 0) {
         return EMPTY_PROJECT_INDEX;
       }
@@ -97,6 +104,7 @@ export function createEnvironmentProjectAtoms(input: {
   }).pipe(Atom.withLabel("environment-project-list"));
 
   return {
+    environmentAllProjectsAtom,
     environmentProjectsAtom,
     environmentProjectIndexAtom,
     environmentProjectRefsAtom,

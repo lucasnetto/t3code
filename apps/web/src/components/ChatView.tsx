@@ -1383,7 +1383,8 @@ function ChatViewContent(props: ChatViewProps) {
   const interactionMode =
     composerInteractionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
-  const canCheckoutPullRequestIntoThread = isLocalDraftThread;
+  const isTaskDraft = isLocalDraftThread && draftThread?.taskDraft !== undefined;
+  const canCheckoutPullRequestIntoThread = isLocalDraftThread && !isTaskDraft;
   const activeThreadId = activeThread?.id ?? null;
   const runningTerminalIds = useThreadRunningTerminalIds({
     environmentId: activeThread?.environmentId ?? null,
@@ -4306,19 +4307,32 @@ function ChatViewContent(props: ChatViewProps) {
 
     let turnStartSucceeded = false;
     if (failure === null && turnAttachmentsResult._tag === "Success") {
+      const taskDraft = isLocalDraftThread ? draftThread?.taskDraft : undefined;
       const bootstrap =
         isLocalDraftThread || baseBranchForWorktree
           ? {
+              ...(taskDraft
+                ? {
+                    createTask: {
+                      taskId: taskDraft.taskId,
+                      title: taskDraft.title,
+                      workspaceProjectId: taskDraft.workspaceProjectId,
+                      approvedProjectIds: taskDraft.approvedProjectIds,
+                      createdAt: activeThread.createdAt,
+                    },
+                  }
+                : {}),
               ...(isLocalDraftThread
                 ? {
                     createThread: {
-                      projectId: activeProject.id,
+                      projectId: taskDraft?.workspaceProjectId ?? activeProject.id,
                       title,
                       modelSelection: threadCreateModelSelection,
                       runtimeMode,
                       interactionMode,
-                      branch: activeThreadBranch,
-                      worktreePath: activeThread.worktreePath,
+                      branch: taskDraft ? null : activeThreadBranch,
+                      worktreePath: taskDraft ? null : activeThread.worktreePath,
+                      ...(taskDraft ? { taskId: taskDraft.taskId } : {}),
                       createdAt: activeThread.createdAt,
                     },
                   }
@@ -5094,7 +5108,7 @@ function ChatViewContent(props: ChatViewProps) {
 
   const panelToggleControls = (
     <PanelLayoutControls
-      terminalAvailable={activeProject !== null && !agentCreatedTaskThread}
+      terminalAvailable={activeProject !== null && !agentCreatedTaskThread && !isTaskDraft}
       terminalOpen={terminalUiState.terminalOpen}
       terminalShortcutLabel={shortcutLabelForCommand(keybindings, "terminal.toggle")}
       rightPanelAvailable={activeProject !== null}
@@ -5222,12 +5236,14 @@ function ChatViewContent(props: ChatViewProps) {
             activeThreadId={activeThread.id}
             {...(routeKind === "draft" && draftId ? { draftId } : {})}
             activeThreadTitle={activeThread.title}
-            activeProjectName={activeProject?.title}
+            activeProjectName={draftThread?.taskDraft?.title ?? activeProject?.title}
             activeProjectCwd={
-              agentCreatedTaskThread ? null : (activeProject?.workspaceRoot ?? null)
+              agentCreatedTaskThread || isTaskDraft ? null : (activeProject?.workspaceRoot ?? null)
             }
-            openInCwd={agentCreatedTaskThread ? null : gitCwd}
-            activeProjectScripts={agentCreatedTaskThread ? undefined : activeProject?.scripts}
+            openInCwd={agentCreatedTaskThread || isTaskDraft ? null : gitCwd}
+            activeProjectScripts={
+              agentCreatedTaskThread || isTaskDraft ? undefined : activeProject?.scripts
+            }
             preferredScriptId={
               activeProject ? (lastInvokedScriptByProjectId[activeProject.id] ?? null) : null
             }
@@ -5235,7 +5251,7 @@ function ChatViewContent(props: ChatViewProps) {
             availableEditors={availableEditors}
             rightPanelOpen={rightPanelOpen}
             gitCwd={gitCwd}
-            gitActionsAvailable={!agentCreatedTaskThread}
+            gitActionsAvailable={!agentCreatedTaskThread && !isTaskDraft}
             onRunProjectScript={runProjectScript}
             onAddProjectScript={saveProjectScript}
             onUpdateProjectScript={updateProjectScript}
@@ -5377,6 +5393,9 @@ function ChatViewContent(props: ChatViewProps) {
                           <DraftHeroHeadline
                             activeProjectRef={activeProjectRef}
                             activeProjectTitle={activeProject?.title ?? null}
+                            {...(draftThread?.taskDraft
+                              ? { taskTitle: draftThread.taskDraft.title }
+                              : {})}
                           />
                         </div>
                         <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
@@ -5486,7 +5505,7 @@ function ChatViewContent(props: ChatViewProps) {
                               : "pb-[calc(env(safe-area-inset-bottom)+0.75rem)] sm:pb-[calc(env(safe-area-inset-bottom)+1rem)]",
                           )}
                         >
-                          {isGitRepo && (
+                          {isGitRepo && !isTaskDraft && (
                             <div className="pointer-events-auto">
                               <BranchToolbar
                                 environmentId={activeThread.environmentId}
