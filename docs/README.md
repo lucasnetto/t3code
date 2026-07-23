@@ -2,6 +2,7 @@
 
 - [Getting started](./getting-started/quick-start.md)
 - [Architecture](./architecture/overview.md)
+  - [Multi-repository tasks plan](./architecture/multi-repo-tasks.md)
 - [T3 Connect](./cloud/t3-connect-clerk.md)
 - [Integrations](./integrations/source-control-providers.md)
 - [Mobile](./mobile/app.md)
