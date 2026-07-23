@@ -336,6 +336,68 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "task.thread.revert": {
+      yield* requireActiveTask({
+        readModel,
+        command,
+        taskId: command.taskId,
+      });
+      const source = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.sourceThreadId,
+      });
+      const target = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.targetThreadId,
+      });
+      if (
+        source.taskContext?.taskId !== command.taskId ||
+        source.taskContext.createdBy.kind !== "user"
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Source thread '${command.sourceThreadId}' is not a user-created thread in task '${command.taskId}'.`,
+        });
+      }
+      if (
+        target.taskContext?.taskId !== command.taskId ||
+        target.taskContext.createdBy.kind !== "agent"
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Target thread '${command.targetThreadId}' is not an agent-created thread in task '${command.taskId}'.`,
+        });
+      }
+      if (target.worktreePath === null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Target thread '${command.targetThreadId}' has no repository checkpoint history.`,
+        });
+      }
+      if (target.latestTurn?.state === "running") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Target thread '${command.targetThreadId}' is still working.`,
+        });
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.targetThreadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.checkpoint-revert-requested",
+        payload: {
+          threadId: command.targetThreadId,
+          turnCount: command.turnCount,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
     case "project.create": {
       yield* requireProjectAbsent({
         readModel,

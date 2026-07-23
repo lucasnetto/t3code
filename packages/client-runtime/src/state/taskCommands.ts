@@ -5,9 +5,11 @@ import type { EnvironmentRegistry } from "../connection/registry.ts";
 import {
   type ApproveTaskRepositoryInput,
   type CreateTaskInput,
+  type RevertTaskThreadInput,
   type UpdateTaskInput,
   approveTaskRepository,
   createTask,
+  revertTaskThread,
   updateTask,
 } from "../operations/commands.ts";
 import { createAtomCommandScheduler, createEnvironmentCommand } from "./runtime.ts";
@@ -15,6 +17,7 @@ import { createAtomCommandScheduler, createEnvironmentCommand } from "./runtime.
 export type {
   ApproveTaskRepositoryInput,
   CreateTaskInput,
+  RevertTaskThreadInput,
   UpdateTaskInput,
 } from "../operations/commands.ts";
 
@@ -44,6 +47,12 @@ export function createTaskEnvironmentAtoms<R, E>(
     approveRepository: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:task:approve-repository",
       execute: (input: ApproveTaskRepositoryInput) => approveTaskRepository(input),
+      scheduler,
+      concurrency,
+    }),
+    revertThread: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:task:revert-thread",
+      execute: (input: RevertTaskThreadInput) => revertTaskThread(input),
       scheduler,
       concurrency,
     }),

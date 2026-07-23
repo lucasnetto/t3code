@@ -41,6 +41,7 @@ export type ApproveTaskRepositoryInput = Omit<
 > & {
   readonly approvedAt?: string;
 };
+export type RevertTaskThreadInput = CommandInput<"task.thread.revert">;
 export type CreateThreadInput = CommandInput<"thread.create">;
 export type DeleteThreadInput = CommandInput<"thread.delete">;
 export type ArchiveThreadInput = CommandInput<"thread.archive">;
@@ -155,6 +156,18 @@ export const approveTaskRepository: (input: ApproveTaskRepositoryInput) => Comma
       approvedAt: input.approvedAt ?? (yield* DateTime.now.pipe(Effect.map(DateTime.formatIso))),
     });
   });
+
+export const revertTaskThread: (input: RevertTaskThreadInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.revertTaskThread",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "task.thread.revert",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
 
 export const createThread: (input: CreateThreadInput) => CommandEffect = Effect.fn(
   "EnvironmentCommands.createThread",

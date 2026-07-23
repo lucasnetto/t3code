@@ -206,6 +206,30 @@ it.layer(NodeServices.layer)("task decider", (it) => {
           },
         },
       });
+      readModel = yield* projectEvent(readModel, { ...agentEvent, sequence: 5 });
+
+      const revertResult = yield* decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "task.thread.revert",
+          commandId: CommandId.make("command-task-revert"),
+          taskId: TaskId.make("task-1"),
+          sourceThreadId: ThreadId.make("thread-user"),
+          targetThreadId: ThreadId.make("thread-agent"),
+          turnCount: 1,
+          createdAt: now,
+        },
+      });
+      const revertEvent = Array.isArray(revertResult) ? revertResult[0] : revertResult;
+      expect(revertEvent).toMatchObject({
+        aggregateKind: "thread",
+        aggregateId: "thread-agent",
+        type: "thread.checkpoint-revert-requested",
+        payload: {
+          threadId: "thread-agent",
+          turnCount: 1,
+        },
+      });
     }),
   );
 

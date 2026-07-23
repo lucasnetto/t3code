@@ -26,6 +26,7 @@ import {
   archiveThread,
   approveTaskRepository,
   createProject,
+  revertTaskThread,
   settleThread,
   stopThreadSession,
   unsettleThread,
@@ -141,6 +142,33 @@ describe("environment commands", () => {
           taskId: "task-1",
           projectId: "project-1",
           approvedAt: "2026-06-06T00:02:00.000Z",
+        },
+      ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("dispatches task-level thread revert metadata", () =>
+    Effect.gen(function* () {
+      const dispatched: ClientOrchestrationCommand[] = [];
+      const supervisor = yield* makeSupervisor(dispatched);
+
+      yield* revertTaskThread({
+        taskId: TaskId.make("task-1"),
+        sourceThreadId: ThreadId.make("thread-user"),
+        targetThreadId: ThreadId.make("thread-agent"),
+        turnCount: 2,
+        createdAt: "2026-06-06T00:03:00.000Z",
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(dispatched).toEqual([
+        {
+          type: "task.thread.revert",
+          commandId: "00000000-0000-4000-8000-000000000000",
+          taskId: "task-1",
+          sourceThreadId: "thread-user",
+          targetThreadId: "thread-agent",
+          turnCount: 2,
+          createdAt: "2026-06-06T00:03:00.000Z",
         },
       ]);
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),

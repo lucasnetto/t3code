@@ -65,6 +65,7 @@ function commandToAggregateRef(command: OrchestrationCommand): {
     case "task.create":
     case "task.update":
     case "task.repository.approve":
+    case "task.thread.revert":
       return {
         aggregateKind: "task",
         aggregateId: command.taskId,

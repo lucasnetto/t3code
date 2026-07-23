@@ -607,6 +607,16 @@ const TaskRepositoryApproveCommand = Schema.Struct({
   approvedAt: IsoDateTime,
 });
 
+const TaskThreadRevertCommand = Schema.Struct({
+  type: Schema.Literal("task.thread.revert"),
+  commandId: CommandId,
+  taskId: TaskId,
+  sourceThreadId: ThreadId,
+  targetThreadId: ThreadId,
+  turnCount: NonNegativeInt,
+  createdAt: IsoDateTime,
+});
+
 const ProjectMetaUpdateCommand = Schema.Struct({
   type: Schema.Literal("project.meta.update"),
   commandId: CommandId,
@@ -823,6 +833,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   TaskCreateCommand,
   TaskUpdateCommand,
   TaskRepositoryApproveCommand,
+  TaskThreadRevertCommand,
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
   ProjectDeleteCommand,
@@ -849,6 +860,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   TaskCreateCommand,
   TaskUpdateCommand,
   TaskRepositoryApproveCommand,
+  TaskThreadRevertCommand,
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
   ProjectDeleteCommand,

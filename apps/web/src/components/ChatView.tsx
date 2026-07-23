@@ -212,6 +212,7 @@ import {
   useThread,
   useThreadProposedPlans,
   useThreadRefs,
+  useThreadShells,
 } from "../state/entities";
 import { environmentShell } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
@@ -1410,9 +1411,13 @@ function ChatViewContent(props: ChatViewProps) {
           taskId: activeThread.taskContext.taskId,
         };
   const activeTask = useTask(activeTaskRef);
+  const allThreadShells = useThreadShells();
   const createTaskThread = useNewTaskThreadHandler();
   const approveTaskRepository = useAtomCommand(taskEnvironment.approveRepository, {
     label: "approve task repository",
+  });
+  const revertTaskThread = useAtomCommand(taskEnvironment.revertThread, {
+    label: "revert task thread",
   });
   const [taskManagementOpen, setTaskManagementOpen] = useState(false);
   const canCheckoutPullRequestIntoThread = isLocalDraftThread && !isTaskDraft;
@@ -1601,6 +1606,18 @@ function ChatViewContent(props: ChatViewProps) {
         : allProjects.filter((project) => project.environmentId === activeTask.environmentId),
     [activeTask, allProjects],
   );
+  const taskAgentThreads = useMemo(
+    () =>
+      activeTask === null
+        ? []
+        : allThreadShells.filter(
+            (thread) =>
+              thread.environmentId === activeTask.environmentId &&
+              thread.taskContext?.taskId === activeTask.id &&
+              thread.taskContext.createdBy.kind === "agent",
+          ),
+    [activeTask, allThreadShells],
+  );
   const handleApproveTaskProject = useCallback(
     async (project: EnvironmentProject) => {
       if (activeTask === null) {
@@ -1630,6 +1647,38 @@ function ChatViewContent(props: ChatViewProps) {
       await createTaskThread(activeTask, project);
     },
     [activeTask, createTaskThread],
+  );
+  const handleRevertTaskThread = useCallback(
+    async (target: (typeof taskAgentThreads)[number], turnCount: number) => {
+      const localApi = readLocalApi();
+      if (
+        localApi == null ||
+        activeTask === null ||
+        activeThread?.taskContext?.createdBy.kind !== "user"
+      ) {
+        return;
+      }
+      const confirmed = await localApi.dialogs.confirm(
+        [
+          `Restore ${target.title} to turn ${turnCount}?`,
+          "This discards newer conversation state and filesystem changes in that thread.",
+          "This action cannot be undone.",
+        ].join("\n"),
+      );
+      if (!confirmed) {
+        return;
+      }
+      await revertTaskThread({
+        environmentId: activeTask.environmentId,
+        input: {
+          taskId: activeTask.id,
+          sourceThreadId: activeThread.id,
+          targetThreadId: target.id,
+          turnCount,
+        },
+      });
+    },
+    [activeTask, activeThread, revertTaskThread],
   );
   const primaryEnvironmentId = primaryEnvironment?.environmentId ?? null;
   const activeEnvironment =
@@ -5746,6 +5795,8 @@ function ChatViewContent(props: ChatViewProps) {
           onApproveProject={handleApproveTaskProject}
           onCreateThread={handleCreateTaskThread}
           onCreateRepositoryThread={handleCreateTaskRepositoryThread}
+          agentThreads={taskAgentThreads}
+          onRevertThread={handleRevertTaskThread}
         />
       ) : null}
     </div>
