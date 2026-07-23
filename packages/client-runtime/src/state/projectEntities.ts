@@ -24,7 +24,9 @@ export function createEnvironmentProjectAtoms(input: {
   const environmentProjectsAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make(
       (get): ReadonlyArray<OrchestrationProjectShell> =>
-        get(input.snapshotAtom(environmentId))?.projects ?? EMPTY_PROJECTS,
+        get(input.snapshotAtom(environmentId))?.projects.filter(
+          (project) => project.visibility !== "internal-task",
+        ) ?? EMPTY_PROJECTS,
     ).pipe(Atom.withLabel(`environment-projects:${environmentId}`)),
   );
 

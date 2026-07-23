@@ -1,6 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import type {
   EnvironmentProject,
+  EnvironmentTask,
   EnvironmentThread,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
@@ -11,6 +12,7 @@ import type {
   OrchestrationSession,
   OrchestrationThreadActivity,
   ScopedProjectRef,
+  ScopedTaskRef,
   ScopedThreadRef,
   ServerConfig,
 } from "@t3tools/contracts";
@@ -19,11 +21,13 @@ import { Atom } from "effect/unstable/reactivity";
 import { useMemo } from "react";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentProjects } from "./projects";
+import { environmentTasks } from "./tasks";
 import { environmentServerConfigsAtom } from "./server";
 import { allEnvironmentShellsBootstrappedAtom } from "./shell";
 import { environmentThreadDetails, environmentThreadShells } from "./threads";
 
 const EMPTY_PROJECT_REFS: ReadonlyArray<ScopedProjectRef> = Object.freeze([]);
+const EMPTY_TASK_REFS: ReadonlyArray<ScopedTaskRef> = Object.freeze([]);
 const EMPTY_THREAD_REFS: ReadonlyArray<ScopedThreadRef> = Object.freeze([]);
 const EMPTY_MESSAGES: ReadonlyArray<OrchestrationMessage> = Object.freeze([]);
 const EMPTY_ACTIVITIES: ReadonlyArray<OrchestrationThreadActivity> = Object.freeze([]);
@@ -32,6 +36,10 @@ const EMPTY_PROPOSED_PLANS: ReadonlyArray<OrchestrationProposedPlan> = Object.fr
 const EMPTY_PROJECT_ATOM = Atom.make<EnvironmentProject | null>(null).pipe(
   Atom.withLabel("web-project:empty"),
 );
+const EMPTY_TASK_ATOM = Atom.make<EnvironmentTask | null>(null).pipe(
+  Atom.withLabel("web-task:empty"),
+);
+const EMPTY_TASK_REFS_ATOM = Atom.make(EMPTY_TASK_REFS).pipe(Atom.withLabel("web-task-refs:empty"));
 const EMPTY_PROJECT_REFS_ATOM = Atom.make(EMPTY_PROJECT_REFS).pipe(
   Atom.withLabel("web-project-refs:empty"),
 );
@@ -78,6 +86,10 @@ export function useProjectRefs(): ReadonlyArray<ScopedProjectRef> {
   return useAtomValue(environmentProjects.projectRefsAtom);
 }
 
+export function useTaskRefs(): ReadonlyArray<ScopedTaskRef> {
+  return useAtomValue(environmentTasks.taskRefsAtom);
+}
+
 export function useThreadRefs(): ReadonlyArray<ScopedThreadRef> {
   return useAtomValue(environmentThreadShells.threadRefsAtom);
 }
@@ -89,6 +101,16 @@ export function useEnvironmentProjectRefs(
     environmentId === null
       ? EMPTY_PROJECT_REFS_ATOM
       : environmentProjects.environmentProjectRefsAtom(environmentId),
+  );
+}
+
+export function useEnvironmentTaskRefs(
+  environmentId: EnvironmentId | null,
+): ReadonlyArray<ScopedTaskRef> {
+  return useAtomValue(
+    environmentId === null
+      ? EMPTY_TASK_REFS_ATOM
+      : environmentTasks.environmentTaskRefsAtom(environmentId),
   );
 }
 
@@ -104,6 +126,10 @@ export function useEnvironmentThreadRefs(
 
 export function useProjects(): ReadonlyArray<EnvironmentProject> {
   return useAtomValue(environmentProjects.projectsAtom);
+}
+
+export function useTasks(): ReadonlyArray<EnvironmentTask> {
+  return useAtomValue(environmentTasks.tasksAtom);
 }
 
 export function useServerConfigs(): ReadonlyMap<EnvironmentId, ServerConfig> {
@@ -126,6 +152,10 @@ export function useThreadShellsForProjectRefs(
 
 export function useProject(ref: ScopedProjectRef | null): EnvironmentProject | null {
   return useAtomValue(ref === null ? EMPTY_PROJECT_ATOM : environmentProjects.projectAtom(ref));
+}
+
+export function useTask(ref: ScopedTaskRef | null): EnvironmentTask | null {
+  return useAtomValue(ref === null ? EMPTY_TASK_ATOM : environmentTasks.taskAtom(ref));
 }
 
 export function useThreadShell(ref: ScopedThreadRef | null): EnvironmentThreadShell | null {
@@ -192,6 +222,13 @@ export function readEnvironmentSupportsSettlement(environmentId: EnvironmentId):
   return (
     appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
       .threadSettlement === true
+  );
+}
+
+export function readEnvironmentSupportsTasks(environmentId: EnvironmentId): boolean {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .taskThreads === true
   );
 }
 
