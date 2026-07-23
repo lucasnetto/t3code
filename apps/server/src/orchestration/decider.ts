@@ -202,7 +202,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
 
-      return [
+      if (command.initialThread !== undefined) {
+        yield* requireThreadAbsent({
+          readModel,
+          command,
+          threadId: command.initialThread.threadId,
+        });
+      }
+
+      const events: PlannedOrchestrationEvent[] = [
         {
           ...(yield* withEventBase({
             aggregateKind: "project",
@@ -243,6 +251,34 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           },
         },
       ];
+      if (command.initialThread !== undefined) {
+        events.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.initialThread.threadId,
+            occurredAt: command.initialThread.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.created",
+          payload: {
+            threadId: command.initialThread.threadId,
+            projectId: command.workspaceProjectId,
+            title: command.initialThread.title,
+            modelSelection: command.initialThread.modelSelection,
+            runtimeMode: command.initialThread.runtimeMode,
+            interactionMode: command.initialThread.interactionMode,
+            branch: null,
+            worktreePath: null,
+            createdAt: command.initialThread.createdAt,
+            updatedAt: command.initialThread.createdAt,
+            taskContext: {
+              taskId: command.taskId,
+              createdBy: { kind: "user" },
+            },
+          },
+        });
+      }
+      return events;
     }
 
     case "task.update": {

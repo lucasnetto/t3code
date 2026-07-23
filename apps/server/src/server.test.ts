@@ -7235,6 +7235,171 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("creates the task and first user thread before starting provider execution", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const taskId = TaskId.make("task-first-send");
+      const workspaceProjectId = ProjectId.make("project-task-first-send");
+      const threadId = ThreadId.make("thread-task-first-send");
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatchedCommands.push(command);
+                return { sequence: dispatchedCommands.length };
+              }),
+            readEvents: () => Stream.empty,
+          },
+          projectionSnapshotQuery: {
+            getShellSnapshot: () =>
+              Effect.sync(() => {
+                const taskCommand = dispatchedCommands.find(
+                  (
+                    candidate,
+                  ): candidate is Extract<OrchestrationCommand, { type: "task.create" }> =>
+                    candidate.type === "task.create",
+                );
+                return {
+                  snapshotSequence: dispatchedCommands.length,
+                  tasks: taskCommand
+                    ? [
+                        {
+                          id: taskCommand.taskId,
+                          title: taskCommand.title,
+                          status: "active" as const,
+                          rootPath: taskCommand.rootPath,
+                          workspaceProjectId: taskCommand.workspaceProjectId,
+                          approvedProjectIds: taskCommand.approvedProjectIds,
+                          createdAt: taskCommand.createdAt,
+                          updatedAt: taskCommand.createdAt,
+                          completedAt: null,
+                        },
+                      ]
+                    : [],
+                  projects: [
+                    {
+                      id: defaultProjectId,
+                      title: "T3 Code Web",
+                      workspaceRoot: "/tmp/project",
+                      defaultModelSelection: null,
+                      scripts: [],
+                      createdAt,
+                      updatedAt: createdAt,
+                    },
+                    ...(taskCommand
+                      ? [
+                          {
+                            id: workspaceProjectId,
+                            title: "Coordinate release workspace",
+                            workspaceRoot: taskCommand.rootPath,
+                            defaultModelSelection: null,
+                            scripts: [],
+                            createdAt,
+                            updatedAt: createdAt,
+                            visibility: "internal-task" as const,
+                          },
+                        ]
+                      : []),
+                  ],
+                  threads: taskCommand?.initialThread
+                    ? [
+                        {
+                          id: taskCommand.initialThread.threadId,
+                          projectId: taskCommand.workspaceProjectId,
+                          title: taskCommand.initialThread.title,
+                          modelSelection: taskCommand.initialThread.modelSelection,
+                          runtimeMode: taskCommand.initialThread.runtimeMode,
+                          interactionMode: taskCommand.initialThread.interactionMode,
+                          branch: null,
+                          worktreePath: null,
+                          latestTurn: null,
+                          createdAt: taskCommand.initialThread.createdAt,
+                          updatedAt: taskCommand.initialThread.createdAt,
+                          archivedAt: null,
+                          settledOverride: null,
+                          settledAt: null,
+                          session: null,
+                          latestUserMessageAt: null,
+                          hasPendingApprovals: false,
+                          hasPendingUserInput: false,
+                          hasActionableProposedPlan: false,
+                          taskContext: {
+                            taskId: taskCommand.taskId,
+                            createdBy: { kind: "user" as const },
+                          },
+                        },
+                      ]
+                    : [],
+                  updatedAt: createdAt,
+                };
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const response = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-task-first-send"),
+            threadId,
+            message: {
+              messageId: MessageId.make("msg-task-first-send"),
+              role: "user",
+              text: "coordinate this release",
+              attachments: [],
+            },
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            bootstrap: {
+              createTask: {
+                taskId,
+                title: "Coordinate release",
+                workspaceProjectId,
+                approvedProjectIds: [defaultProjectId],
+                createdAt,
+              },
+              createThread: {
+                projectId: workspaceProjectId,
+                title: "Coordinate release",
+                modelSelection: defaultModelSelection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: null,
+                worktreePath: null,
+                taskId,
+                createdAt,
+              },
+            },
+            createdAt,
+          }),
+        ),
+      );
+
+      assert.equal(response.sequence, 2);
+      assert.deepEqual(
+        dispatchedCommands.map((command) => command.type),
+        ["task.create", "thread.turn.start"],
+      );
+      const taskCommand = dispatchedCommands[0];
+      assertTrue(taskCommand?.type === "task.create");
+      if (taskCommand?.type !== "task.create") {
+        return;
+      }
+      assert.equal(taskCommand.initialThread?.threadId, threadId);
+      assert.equal(taskCommand.initialThread?.title, "Coordinate release");
+      assert.equal(path.basename(taskCommand.rootPath), taskId);
+      assert.equal(yield* fileSystem.exists(path.join(taskCommand.rootPath, "TASK.md")), true);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("does not misattribute setup activity dispatch failures as setup launch failures", () =>
     Effect.gen(function* () {
       const dispatchedCommands: Array<OrchestrationCommand> = [];

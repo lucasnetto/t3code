@@ -570,6 +570,15 @@ export const ProjectCreateCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const TaskCreateInitialThread = Schema.Struct({
+  threadId: ThreadId,
+  title: TrimmedNonEmptyString,
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  createdAt: IsoDateTime,
+});
+
 export const TaskCreateCommand = Schema.Struct({
   type: Schema.Literal("task.create"),
   commandId: CommandId,
@@ -578,6 +587,7 @@ export const TaskCreateCommand = Schema.Struct({
   rootPath: TrimmedNonEmptyString,
   workspaceProjectId: ProjectId,
   approvedProjectIds: Schema.Array(ProjectId),
+  initialThread: Schema.optionalKey(TaskCreateInitialThread),
   createdAt: IsoDateTime,
 });
 
@@ -704,6 +714,14 @@ const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadTurnStartBootstrapCreateTask = Schema.Struct({
+  taskId: TaskId,
+  title: TrimmedNonEmptyString,
+  workspaceProjectId: ProjectId,
+  approvedProjectIds: Schema.Array(ProjectId),
+  createdAt: IsoDateTime,
+});
+
 const ThreadTurnStartBootstrapPrepareWorktree = Schema.Struct({
   projectCwd: TrimmedNonEmptyString,
   baseBranch: TrimmedNonEmptyString,
@@ -712,6 +730,7 @@ const ThreadTurnStartBootstrapPrepareWorktree = Schema.Struct({
 });
 
 const ThreadTurnStartBootstrap = Schema.Struct({
+  createTask: Schema.optional(ThreadTurnStartBootstrapCreateTask),
   createThread: Schema.optional(ThreadTurnStartBootstrapCreateThread),
   prepareWorktree: Schema.optional(ThreadTurnStartBootstrapPrepareWorktree),
   runSetupScript: Schema.optional(Schema.Boolean),
