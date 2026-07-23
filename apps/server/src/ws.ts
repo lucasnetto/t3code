@@ -884,7 +884,8 @@ const makeWsRpcLayer = (
         Effect.gen(function* () {
           const bootstrap = command.bootstrap;
           const { bootstrap: _bootstrap, ...finalTurnStartCommand } = command;
-          const taskId = bootstrap?.createThread?.taskId;
+          const taskId = bootstrap?.createTask?.taskId ?? bootstrap?.createThread?.taskId;
+          let createdTask = false;
           let createdThread = false;
           let targetProjectId = bootstrap?.createThread?.projectId;
           let targetProjectCwd = bootstrap?.prepareWorktree?.projectCwd;
@@ -924,7 +925,7 @@ const makeWsRpcLayer = (
             );
 
           const cleanupCreatedThread = () =>
-            createdThread
+            createdThread && !createdTask
               ? serverCommandId("bootstrap-thread-delete").pipe(
                   Effect.flatMap((commandId) =>
                     orchestrationEngine.dispatch({
@@ -1143,6 +1144,45 @@ const makeWsRpcLayer = (
             });
 
           const bootstrapProgram = Effect.gen(function* () {
+            const createTask = bootstrap?.createTask;
+            const createThread = bootstrap?.createThread;
+            if (createTask) {
+              if (
+                !createThread ||
+                createThread.taskId !== createTask.taskId ||
+                createThread.projectId !== createTask.workspaceProjectId ||
+                createThread.branch !== null ||
+                createThread.worktreePath !== null
+              ) {
+                return yield* new OrchestrationDispatchCommandError({
+                  message: "Task bootstrap requires a matching task-root user thread.",
+                  cause: {
+                    taskId: createTask.taskId,
+                    threadId: command.threadId,
+                  },
+                });
+              }
+              yield* orchestrationEngine.dispatch({
+                type: "task.create",
+                commandId: yield* serverCommandId("bootstrap-task-create"),
+                taskId: createTask.taskId,
+                title: createTask.title,
+                rootPath: taskWorkspace.newTaskRoot(createTask.taskId),
+                workspaceProjectId: createTask.workspaceProjectId,
+                approvedProjectIds: createTask.approvedProjectIds,
+                initialThread: {
+                  threadId: command.threadId,
+                  title: createThread.title,
+                  modelSelection: createThread.modelSelection,
+                  runtimeMode: createThread.runtimeMode,
+                  interactionMode: createThread.interactionMode,
+                  createdAt: createThread.createdAt,
+                },
+                createdAt: createTask.createdAt,
+              });
+              createdTask = true;
+              createdThread = true;
+            }
             const taskContext = taskId ? yield* loadTaskWorkspaceContext(taskId) : null;
 
             if (taskContext && bootstrap?.createThread && bootstrap.prepareWorktree) {
@@ -1201,20 +1241,20 @@ const makeWsRpcLayer = (
                 );
             }
 
-            if (bootstrap?.createThread) {
+            if (createThread && !createTask) {
               yield* orchestrationEngine.dispatch({
                 type: "thread.create",
                 commandId: yield* serverCommandId("bootstrap-thread-create"),
                 threadId: command.threadId,
-                projectId: bootstrap.createThread.projectId,
-                title: bootstrap.createThread.title,
-                modelSelection: bootstrap.createThread.modelSelection,
-                runtimeMode: bootstrap.createThread.runtimeMode,
-                interactionMode: bootstrap.createThread.interactionMode,
-                branch: bootstrap.createThread.branch,
-                worktreePath: bootstrap.createThread.worktreePath,
-                ...(bootstrap.createThread.taskId ? { taskId: bootstrap.createThread.taskId } : {}),
-                createdAt: bootstrap.createThread.createdAt,
+                projectId: createThread.projectId,
+                title: createThread.title,
+                modelSelection: createThread.modelSelection,
+                runtimeMode: createThread.runtimeMode,
+                interactionMode: createThread.interactionMode,
+                branch: createThread.branch,
+                worktreePath: createThread.worktreePath,
+                ...(createThread.taskId ? { taskId: createThread.taskId } : {}),
+                createdAt: createThread.createdAt,
               });
               createdThread = true;
             }
