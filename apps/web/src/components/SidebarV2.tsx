@@ -16,6 +16,7 @@ import {
   CircleDashedIcon,
   CloudIcon,
   FolderPlusIcon,
+  ListTodoIcon,
   MessageSquareIcon,
   PlusIcon,
   SearchIcon,
@@ -58,7 +59,7 @@ import { readLocalApi } from "../localApi";
 import { useUiStateStore } from "../uiStateStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { useThreadActions } from "../hooks/useThreadActions";
-import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useHandleNewThread, useNewTaskHandler } from "../hooks/useHandleNewThread";
 import { openCommandPalette } from "../commandPaletteBus";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useClientSettings } from "../hooks/useSettings";
@@ -103,6 +104,7 @@ import {
 } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { TaskCreateDialog } from "./TaskCreateDialog";
 
 // Settled-tail paging: recent history is the common lookup; the deep tail
 // stays behind an explicit Show more.
@@ -655,6 +657,8 @@ export default function SidebarV2() {
     reportFailure: false,
   });
   const newThreadContext = useHandleNewThread();
+  const createTaskDraft = useNewTaskHandler();
+  const [taskCreateOpen, setTaskCreateOpen] = useState(false);
   const openAddProjectCommandPalette = useCallback(
     () => openCommandPalette({ open: "add-project" }),
     [],
@@ -785,6 +789,27 @@ export default function SidebarV2() {
   // merging, no optimistic holds. Archived threads remain hidden here —
   // archive keeps its original "remove from sidebar" meaning.
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
+  const taskEnvironmentId = useMemo(() => {
+    if (
+      primaryEnvironmentId &&
+      serverConfigs.get(primaryEnvironmentId)?.environment.capabilities.taskThreads === true
+    ) {
+      return primaryEnvironmentId;
+    }
+    return (
+      projects.find(
+        (project) =>
+          serverConfigs.get(project.environmentId)?.environment.capabilities.taskThreads === true,
+      )?.environmentId ?? null
+    );
+  }, [primaryEnvironmentId, projects, serverConfigs]);
+  const taskDraftProjects = useMemo(
+    () =>
+      taskEnvironmentId === null
+        ? []
+        : projects.filter((project) => project.environmentId === taskEnvironmentId),
+    [projects, taskEnvironmentId],
+  );
   const { activeThreads, settledThreads } = useMemo(() => {
     const now = `${nowMinute}:00.000Z`;
     const visible = threads.filter(
@@ -1424,6 +1449,18 @@ export default function SidebarV2() {
               <SidebarMenuButton
                 size="sm"
                 className="size-7 justify-center border border-border bg-background/60 p-0 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
+                onClick={() => setTaskCreateOpen(true)}
+                disabled={taskDraftProjects.length === 0}
+                aria-label="New task"
+                tooltip={{ children: "New task", side: "right" }}
+              >
+                <ListTodoIcon className="size-3.5 text-muted-foreground/70" />
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem className="shrink-0">
+              <SidebarMenuButton
+                size="sm"
+                className="size-7 justify-center border border-border bg-background/60 p-0 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
                 onClick={handleNewThreadClick}
                 disabled={projects.length === 0}
                 aria-label="New thread"
@@ -1650,6 +1687,12 @@ export default function SidebarV2() {
           ) : null}
         </SidebarGroup>
       </SidebarContent>
+      <TaskCreateDialog
+        open={taskCreateOpen}
+        onOpenChange={setTaskCreateOpen}
+        projects={taskDraftProjects}
+        onCreate={createTaskDraft}
+      />
       <SidebarSeparator />
       <SidebarChromeFooter />
     </>

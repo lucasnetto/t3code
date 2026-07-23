@@ -11,6 +11,7 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  TaskId,
   ThreadId,
   type ModelSelection,
   type ProviderOptionSelection,
@@ -764,6 +765,29 @@ describe("composerDraftStore project draft thread mapping", () => {
       runtimeMode: "full-access",
       interactionMode: "default",
       createdAt: "2026-01-01T00:00:00.000Z",
+    });
+  });
+
+  it("keeps task bootstrap metadata with the local draft session", () => {
+    const store = useComposerDraftStore.getState();
+    const taskId = TaskId.make("task-draft");
+    const workspaceProjectId = ProjectId.make("project-task-draft");
+
+    store.setLogicalProjectDraftThreadId("task-draft:task-draft", projectRef, draftId, {
+      threadId,
+      taskDraft: {
+        taskId,
+        title: "Ship payments",
+        workspaceProjectId,
+        approvedProjectIds: [projectId, otherProjectId],
+      },
+    });
+
+    expect(useComposerDraftStore.getState().getDraftSession(draftId)?.taskDraft).toEqual({
+      taskId,
+      title: "Ship payments",
+      workspaceProjectId,
+      approvedProjectIds: [projectId, otherProjectId],
     });
   });
 

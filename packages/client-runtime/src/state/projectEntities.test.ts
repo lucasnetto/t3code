@@ -41,7 +41,7 @@ const snapshot: OrchestrationShellSnapshot = {
 };
 
 describe("environment project projections", () => {
-  it("keeps internal task projects out of ordinary project collections", () => {
+  it("hides internal task projects from collections while keeping direct lookup available", () => {
     const catalogValueAtom = Atom.make<EnvironmentCatalogState>({
       isReady: true,
       entries: new Map([
@@ -77,6 +77,7 @@ describe("environment project projections", () => {
         }),
       ),
     ).toBeNull();
+    expect(registry.get(atoms.environmentAllProjectsAtom(environmentId))).toHaveLength(2);
     expect(
       registry
         .get(atoms.environmentProjectIncludingInternalIndexAtom(environmentId))
