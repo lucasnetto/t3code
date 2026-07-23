@@ -1318,16 +1318,46 @@ const makeWsRpcLayer = (
       const dispatchNormalizedCommand = (
         normalizedCommand: OrchestrationCommand,
       ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> => {
-        const dispatchEffect =
-          normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap
-            ? dispatchBootstrapTurnStart(normalizedCommand)
-            : orchestrationEngine
-                .dispatch(normalizedCommand)
-                .pipe(
-                  Effect.mapError((cause) =>
-                    toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+        const authorizeHumanThreadMutation = Effect.gen(function* () {
+          if (
+            !("threadId" in normalizedCommand) ||
+            normalizedCommand.type === "thread.turn.interrupt" ||
+            normalizedCommand.type === "thread.session.stop" ||
+            normalizedCommand.type === "thread.create"
+          ) {
+            return;
+          }
+          const thread = yield* projectionSnapshotQuery
+            .getThreadShellById(normalizedCommand.threadId)
+            .pipe(
+              Effect.mapError((cause) =>
+                toDispatchCommandError(cause, "Failed to authorize thread command."),
+              ),
+            );
+          if (Option.isSome(thread) && thread.value.taskContext?.createdBy.kind === "agent") {
+            return yield* new OrchestrationDispatchCommandError({
+              message: "Agent-created task threads are read-only to human clients.",
+              cause: {
+                commandType: normalizedCommand.type,
+                threadId: normalizedCommand.threadId,
+              },
+            });
+          }
+        });
+
+        const dispatchEffect = authorizeHumanThreadMutation.pipe(
+          Effect.andThen(
+            normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap
+              ? dispatchBootstrapTurnStart(normalizedCommand)
+              : orchestrationEngine
+                  .dispatch(normalizedCommand)
+                  .pipe(
+                    Effect.mapError((cause) =>
+                      toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+                    ),
                   ),
-                );
+          ),
+        );
 
         return startup
           .enqueueCommand(dispatchEffect)
