@@ -20,6 +20,7 @@ export function TaskManagementDialog({
   projects,
   onApproveProject,
   onCreateThread,
+  onCreateRepositoryThread,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -27,9 +28,11 @@ export function TaskManagementDialog({
   projects: ReadonlyArray<EnvironmentProject>;
   onApproveProject: (project: EnvironmentProject) => Promise<void>;
   onCreateThread: () => Promise<void>;
+  onCreateRepositoryThread: (project: EnvironmentProject) => Promise<void>;
 }) {
   const [approvingProjectId, setApprovingProjectId] = useState<string | null>(null);
   const [isCreatingThread, setIsCreatingThread] = useState(false);
+  const [creatingProjectId, setCreatingProjectId] = useState<string | null>(null);
   const approvedProjectIds = useMemo(
     () => new Set(task.approvedProjectIds),
     [task.approvedProjectIds],
@@ -60,6 +63,16 @@ export function TaskManagementDialog({
       onOpenChange(false);
     } finally {
       setIsCreatingThread(false);
+    }
+  };
+
+  const createRepositoryThread = async (project: EnvironmentProject) => {
+    setCreatingProjectId(project.id);
+    try {
+      await onCreateRepositoryThread(project);
+      onOpenChange(false);
+    } finally {
+      setCreatingProjectId(null);
     }
   };
 
@@ -111,6 +124,15 @@ export function TaskManagementDialog({
                       {project.workspaceRoot}
                     </span>
                   </span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={!taskIsActive || creatingProjectId !== null}
+                    aria-label={`New thread in ${project.title}`}
+                    onClick={() => void createRepositoryThread(project)}
+                  >
+                    {creatingProjectId === project.id ? "Creating…" : "New thread"}
+                  </Button>
                 </div>
               ))}
             </div>

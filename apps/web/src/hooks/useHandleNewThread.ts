@@ -3,7 +3,7 @@ import {
   scopeProjectRef,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
-import type { EnvironmentTask } from "@t3tools/client-runtime/state/models";
+import type { EnvironmentProject, EnvironmentTask } from "@t3tools/client-runtime/state/models";
 import {
   DEFAULT_RUNTIME_MODE,
   DEFAULT_SERVER_SETTINGS,
@@ -241,23 +241,26 @@ export function useNewTaskThreadHandler() {
   const router = useRouter();
 
   return useCallback(
-    async (task: EnvironmentTask): Promise<void> => {
+    async (task: EnvironmentTask, targetProject?: EnvironmentProject): Promise<void> => {
       const draftId = newDraftId();
       const threadId = newThreadId();
       const createdAt = new Date().toISOString();
-      const taskWorkspaceRef = scopeProjectRef(task.environmentId, task.workspaceProjectId);
+      const targetProjectRef = scopeProjectRef(
+        task.environmentId,
+        targetProject?.id ?? task.workspaceProjectId,
+      );
       const { applyStickyState, setLogicalProjectDraftThreadId } = useComposerDraftStore.getState();
 
       setLogicalProjectDraftThreadId(
         `task-thread-draft:${task.id}:${draftId}`,
-        taskWorkspaceRef,
+        targetProjectRef,
         draftId,
         {
           threadId,
           createdAt,
           branch: null,
           worktreePath: null,
-          envMode: "local",
+          envMode: targetProject ? "worktree" : "local",
           startFromOrigin: false,
           runtimeMode: DEFAULT_RUNTIME_MODE,
           taskDraft: {
@@ -266,6 +269,7 @@ export function useNewTaskThreadHandler() {
             workspaceProjectId: task.workspaceProjectId,
             approvedProjectIds: task.approvedProjectIds,
             createTask: false,
+            ...(targetProject ? { targetProjectId: targetProject.id } : {}),
           },
         },
       );

@@ -793,6 +793,31 @@ describe("composerDraftStore project draft thread mapping", () => {
     });
   });
 
+  it("keeps a repository target with an additional task thread draft", () => {
+    const store = useComposerDraftStore.getState();
+    const taskId = TaskId.make("task-existing");
+    const workspaceProjectId = ProjectId.make("project-task-existing");
+
+    store.setLogicalProjectDraftThreadId("task-thread-draft", otherProjectRef, draftId, {
+      threadId,
+      envMode: "worktree",
+      taskDraft: {
+        taskId,
+        title: "Ship payments",
+        workspaceProjectId,
+        approvedProjectIds: [projectId, otherProjectId],
+        createTask: false,
+        targetProjectId: otherProjectId,
+      },
+    });
+
+    expect(useComposerDraftStore.getState().getDraftSession(draftId)?.taskDraft).toMatchObject({
+      taskId,
+      createTask: false,
+      targetProjectId: otherProjectId,
+    });
+  });
+
   it("clears only matching project draft mapping entries", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectRef, draftId, { threadId });
