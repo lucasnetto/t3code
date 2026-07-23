@@ -8,13 +8,18 @@ import {
   type OrchestrationThreadShell,
 } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { McpSchema, McpServer } from "effect/unstable/ai";
 
 import * as CheckpointDiffQuery from "../../../checkpointing/CheckpointDiffQuery.ts";
+import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
+import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ProjectSetupScriptRunner from "../../../project/ProjectSetupScriptRunner.ts";
+import * as TaskWorkspaceService from "../../../tasks/TaskWorkspaceService.ts";
 import * as McpHttpServer from "../../McpHttpServer.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
@@ -40,17 +45,14 @@ const thread = (
   interactionMode: "default",
   branch: id === childThreadId ? "feature/api" : null,
   worktreePath: id === childThreadId ? "/tmp/task/worktrees/child-api" : null,
-  latestTurn:
-    id === childThreadId
-      ? {
-          turnId: TurnId.make("turn-child"),
-          state: "running",
-          requestedAt: createdAt,
-          startedAt: createdAt,
-          completedAt: null,
-          assistantMessageId: null,
-        }
-      : null,
+  latestTurn: {
+    turnId: TurnId.make(id === childThreadId ? "turn-child" : "turn-caller"),
+    state: "running",
+    requestedAt: createdAt,
+    startedAt: createdAt,
+    completedAt: null,
+    assistantMessageId: null,
+  },
   createdAt,
   updatedAt: createdAt,
   archivedAt: null,
@@ -107,6 +109,16 @@ const query = {
           createdAt,
           updatedAt: createdAt,
         },
+        {
+          id: ProjectId.make("project-task"),
+          title: "Task workspace",
+          workspaceRoot: "/tmp/task",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt,
+          updatedAt: createdAt,
+          visibility: "internal-task" as const,
+        },
       ],
       threads: [caller, child],
       updatedAt: createdAt,
@@ -123,6 +135,43 @@ const TestLayer = McpHttpServer.TaskToolkitRegistrationLive.pipe(
     }),
   ),
 );
+
+const makeCoordinationTestLayer = (
+  dispatchedCommands: Array<import("@t3tools/contracts").OrchestrationCommand>,
+) =>
+  McpHttpServer.TaskCoordinationToolkitRegistrationLive.pipe(
+    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provide(Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, query)),
+    Layer.provide(
+      Layer.succeed(OrchestrationEngine.OrchestrationEngineService, {
+        dispatch: (command: import("@t3tools/contracts").OrchestrationCommand) =>
+          Effect.sync(() => {
+            dispatchedCommands.push(command);
+            return { sequence: dispatchedCommands.length };
+          }),
+      } as unknown as OrchestrationEngine.OrchestrationEngineService["Service"]),
+    ),
+    Layer.provide(
+      Layer.succeed(
+        GitWorkflowService.GitWorkflowService,
+        {} as GitWorkflowService.GitWorkflowService["Service"],
+      ),
+    ),
+    Layer.provide(
+      Layer.succeed(
+        ProjectSetupScriptRunner.ProjectSetupScriptRunner,
+        {} as ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"],
+      ),
+    ),
+    Layer.provide(
+      Layer.succeed(TaskWorkspaceService.TaskWorkspaceService, {
+        newTaskRoot: () => "/tmp/task",
+        managedWorktreePath: () => "/tmp/task/worktrees/unused",
+        prepare: () => Effect.void,
+      }),
+    ),
+    Layer.provide(NodeServices.layer),
+  );
 
 const client = McpSchema.McpServerClient.of({
   clientId: 1,
@@ -176,7 +225,7 @@ it.effect("lists only repositories and threads in the credential's task", () =>
       expect(threads.structuredContent).toMatchObject({
         taskId,
         threads: [
-          { threadId: callerThreadId, origin: { kind: "user" }, status: "idle" },
+          { threadId: callerThreadId, origin: { kind: "user" }, status: "working" },
           {
             threadId: childThreadId,
             origin: { kind: "agent", threadId: callerThreadId },
@@ -210,3 +259,46 @@ it.effect("rejects task tools for credentials without the task capability", () =
     }),
   ).pipe(Effect.provide(TestLayer)),
 );
+
+it.effect("spawns a durable agent thread with the exact caller message", () => {
+  const dispatchedCommands: Array<import("@t3tools/contracts").OrchestrationCommand> = [];
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const result = yield* server
+        .callTool({
+          name: "task_spawn_thread",
+          arguments: {
+            message: "Investigate the failing integration\nDo not change unrelated files.",
+          },
+        })
+        .pipe(
+          Effect.provideService(
+            McpInvocationContext.McpInvocationContext,
+            invocation(new Set(["task"])),
+          ),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+
+      expect(result.isError).toBe(false);
+      expect(dispatchedCommands.map((command) => command.type)).toEqual([
+        "thread.agent.create",
+        "thread.turn.start",
+      ]);
+      const create = dispatchedCommands[0];
+      expect(create?.type).toBe("thread.agent.create");
+      if (create?.type === "thread.agent.create") {
+        expect(create.spawningThreadId).toBe(callerThreadId);
+        expect(create.spawningTurnId).toBe(TurnId.make("turn-caller"));
+        expect(create.projectId).toBe(ProjectId.make("project-task"));
+      }
+      const turn = dispatchedCommands[1];
+      expect(turn?.type).toBe("thread.turn.start");
+      if (turn?.type === "thread.turn.start") {
+        expect(turn.message.text).toBe(
+          "Investigate the failing integration\nDo not change unrelated files.",
+        );
+      }
+    }),
+  ).pipe(Effect.provide(makeCoordinationTestLayer(dispatchedCommands)));
+});

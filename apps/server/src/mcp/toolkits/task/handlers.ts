@@ -17,37 +17,47 @@ const MAX_TRANSCRIPT_CHARS = 16_000;
 const DEFAULT_TRANSCRIPT_CHARS = 8_000;
 const MAX_DIFF_CHARS = 32_000;
 
-interface TaskToolScope {
+export interface TaskToolScope {
   readonly task: OrchestrationTask;
   readonly projects: ReadonlyArray<OrchestrationProjectShell>;
   readonly threads: ReadonlyArray<OrchestrationThreadShell>;
 }
 
-const fail = (operation: string, detail: string) =>
+export const failTaskTool = (operation: string, detail: string) =>
   new TaskToolError({
     operation,
     detail,
   });
 
-const requireTaskScope = Effect.fn("TaskToolkit.requireScope")(function* (operation: string) {
+export const requireTaskScope = Effect.fn("TaskToolkit.requireScope")(function* (
+  operation: string,
+) {
   const invocation = yield* McpInvocationContext.McpInvocationContext;
   if (!invocation.capabilities.has("task")) {
-    return yield* fail(operation, "This provider session does not have task orchestration access.");
+    return yield* failTaskTool(
+      operation,
+      "This provider session does not have task orchestration access.",
+    );
   }
   const query = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const caller = yield* query
     .getThreadShellById(invocation.threadId)
-    .pipe(Effect.mapError(() => fail(operation, "Could not resolve the calling task thread.")));
+    .pipe(
+      Effect.mapError(() => failTaskTool(operation, "Could not resolve the calling task thread.")),
+    );
   if (Option.isNone(caller) || caller.value.taskContext?.createdBy.kind !== "user") {
-    return yield* fail(operation, "Task tools require a user-created thread in an active task.");
+    return yield* failTaskTool(
+      operation,
+      "Task tools require a user-created thread in an active task.",
+    );
   }
   const snapshot = yield* query
     .getShellSnapshot()
-    .pipe(Effect.mapError(() => fail(operation, "Could not load the current task.")));
+    .pipe(Effect.mapError(() => failTaskTool(operation, "Could not load the current task.")));
   const taskId = caller.value.taskContext.taskId;
   const task = snapshot.tasks?.find((candidate) => candidate.id === taskId);
   if (!task || task.status !== "active") {
-    return yield* fail(operation, `Task '${taskId}' is not active.`);
+    return yield* failTaskTool(operation, `Task '${taskId}' is not active.`);
   }
   return {
     task,
@@ -56,7 +66,7 @@ const requireTaskScope = Effect.fn("TaskToolkit.requireScope")(function* (operat
   } satisfies TaskToolScope;
 });
 
-function statusForThread(
+export function statusForThread(
   thread: OrchestrationThreadShell,
 ): "idle" | "working" | "approval" | "input" | "failed" | "ready" {
   if (thread.hasPendingApprovals) return "approval";
@@ -67,7 +77,7 @@ function statusForThread(
   return "idle";
 }
 
-function summary(thread: OrchestrationThreadShell) {
+export function taskThreadSummary(thread: OrchestrationThreadShell) {
   const createdBy = thread.taskContext?.createdBy;
   return {
     threadId: thread.id,
@@ -84,7 +94,7 @@ function summary(thread: OrchestrationThreadShell) {
   };
 }
 
-function requireThread(
+export function requireTaskThread(
   scope: TaskToolScope,
   threadId: ThreadId,
   operation: string,
@@ -94,7 +104,7 @@ function requireThread(
   );
   return thread
     ? Effect.succeed(thread)
-    : Effect.fail(fail(operation, `Thread '${threadId}' is outside the current task.`));
+    : Effect.fail(failTaskTool(operation, `Thread '${threadId}' is outside the current task.`));
 }
 
 function decodeCursor(
@@ -109,7 +119,7 @@ function decodeCursor(
       if (!Number.isSafeInteger(index) || index < 0) throw new Error("invalid cursor");
       return index;
     },
-    catch: () => fail(operation, "The transcript cursor is invalid."),
+    catch: () => failTaskTool(operation, "The transcript cursor is invalid."),
   });
 }
 
@@ -140,26 +150,28 @@ const handlers = {
         taskId: scope.task.id,
         threads: scope.threads
           .filter((thread) => thread.taskContext?.taskId === scope.task.id)
-          .map(summary),
+          .map(taskThreadSummary),
       };
     }),
   task_get_thread_status: ({ threadId }) =>
     Effect.gen(function* () {
       const scope = yield* requireTaskScope("task.get_thread_status");
-      return summary(yield* requireThread(scope, threadId, "task.get_thread_status"));
+      return taskThreadSummary(yield* requireTaskThread(scope, threadId, "task.get_thread_status"));
     }),
   task_read_thread: ({ threadId, cursor, maxChars }) =>
     Effect.gen(function* () {
       const operation = "task.read_thread";
       const scope = yield* requireTaskScope(operation);
-      yield* requireThread(scope, threadId, operation);
+      yield* requireTaskThread(scope, threadId, operation);
       const offset = yield* decodeCursor(cursor, operation);
       const query = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
       const detail = yield* query
         .getThreadDetailById(threadId)
-        .pipe(Effect.mapError(() => fail(operation, `Could not read thread '${threadId}'.`)));
+        .pipe(
+          Effect.mapError(() => failTaskTool(operation, `Could not read thread '${threadId}'.`)),
+        );
       if (Option.isNone(detail)) {
-        return yield* fail(operation, `Thread '${threadId}' was not found.`);
+        return yield* failTaskTool(operation, `Thread '${threadId}' was not found.`);
       }
       const limit = Math.min(
         Math.max(maxChars ?? DEFAULT_TRANSCRIPT_CHARS, 1),
@@ -192,16 +204,18 @@ const handlers = {
     Effect.gen(function* () {
       const operation = "task.get_thread_diff";
       const scope = yield* requireTaskScope(operation);
-      const thread = yield* requireThread(scope, threadId, operation);
+      const thread = yield* requireTaskThread(scope, threadId, operation);
       if (!thread.worktreePath) {
-        return yield* fail(operation, `Thread '${threadId}' has no repository checkout.`);
+        return yield* failTaskTool(operation, `Thread '${threadId}' has no repository checkout.`);
       }
       const query = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
       const detail = yield* query
         .getThreadDetailById(threadId)
-        .pipe(Effect.mapError(() => fail(operation, `Could not inspect thread '${threadId}'.`)));
+        .pipe(
+          Effect.mapError(() => failTaskTool(operation, `Could not inspect thread '${threadId}'.`)),
+        );
       if (Option.isNone(detail)) {
-        return yield* fail(operation, `Thread '${threadId}' was not found.`);
+        return yield* failTaskTool(operation, `Thread '${threadId}' was not found.`);
       }
       const lastTurn = detail.value.checkpoints.reduce(
         (maximum, checkpoint) => Math.max(maximum, checkpoint.checkpointTurnCount),
@@ -210,7 +224,10 @@ const handlers = {
       const resolvedFrom = fromTurn ?? 0;
       const resolvedTo = toTurn ?? lastTurn;
       if (resolvedTo === 0) {
-        return yield* fail(operation, `Thread '${threadId}' has no completed Git checkpoint.`);
+        return yield* failTaskTool(
+          operation,
+          `Thread '${threadId}' has no completed Git checkpoint.`,
+        );
       }
       const checkpointDiff = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const result = yield* checkpointDiff
@@ -221,7 +238,9 @@ const handlers = {
           ignoreWhitespace: true,
         })
         .pipe(
-          Effect.mapError(() => fail(operation, `Could not compute the diff for '${threadId}'.`)),
+          Effect.mapError(() =>
+            failTaskTool(operation, `Could not compute the diff for '${threadId}'.`),
+          ),
         );
       return {
         threadId,
