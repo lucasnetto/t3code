@@ -879,6 +879,37 @@ const makeWsRpcLayer = (
           Stream.flatMap((items) => Stream.fromIterable(items)),
         );
 
+      const loadTaskWorkspaceContext = (taskId: TaskId) =>
+        projectionSnapshotQuery.getShellSnapshot().pipe(
+          Effect.mapError((cause) =>
+            toDispatchCommandError(cause, "Failed to load task workspace context."),
+          ),
+          Effect.flatMap((snapshot) => {
+            const task = snapshot.tasks?.find((candidate) => candidate.id === taskId);
+            if (!task) {
+              return Effect.fail(
+                new OrchestrationDispatchCommandError({
+                  message: `Task ${taskId} was not found while preparing its workspace.`,
+                  cause: { taskId },
+                }),
+              );
+            }
+            return Effect.succeed({
+              task,
+              projects: snapshot.projects,
+              threads: snapshot.threads,
+            });
+          }),
+        );
+
+      const refreshTaskWorkspace = (taskId: TaskId) =>
+        loadTaskWorkspaceContext(taskId).pipe(
+          Effect.flatMap(taskWorkspace.prepare),
+          Effect.mapError((cause) =>
+            toDispatchCommandError(cause, "Failed to prepare task workspace."),
+          ),
+        );
+
       const dispatchBootstrapTurnStart = (
         command: Extract<OrchestrationCommand, { type: "thread.turn.start" }>,
       ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> =>
@@ -956,37 +987,6 @@ const makeWsRpcLayer = (
               }
             },
           );
-
-          const loadTaskWorkspaceContext = (taskId: TaskId) =>
-            projectionSnapshotQuery.getShellSnapshot().pipe(
-              Effect.mapError((cause) =>
-                toDispatchCommandError(cause, "Failed to load task workspace context."),
-              ),
-              Effect.flatMap((snapshot) => {
-                const task = snapshot.tasks?.find((candidate) => candidate.id === taskId);
-                if (!task) {
-                  return Effect.fail(
-                    new OrchestrationDispatchCommandError({
-                      message: `Task ${taskId} was not found while preparing its workspace.`,
-                      cause: { taskId },
-                    }),
-                  );
-                }
-                return Effect.succeed({
-                  task,
-                  projects: snapshot.projects,
-                  threads: snapshot.threads,
-                });
-              }),
-            );
-
-          const refreshTaskWorkspace = (taskId: TaskId) =>
-            loadTaskWorkspaceContext(taskId).pipe(
-              Effect.flatMap(taskWorkspace.prepare),
-              Effect.mapError((cause) =>
-                toDispatchCommandError(cause, "Failed to prepare task workspace."),
-              ),
-            );
 
           const cleanupCreatedThread = () =>
             createdThread && !createdTask
@@ -1522,6 +1522,11 @@ const makeWsRpcLayer = (
                 .pipe(
                   Effect.mapError((cause) =>
                     toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+                  ),
+                  Effect.tap(() =>
+                    normalizedCommand.type === "task.repository.approve"
+                      ? refreshTaskWorkspace(normalizedCommand.taskId)
+                      : Effect.void,
                   ),
                 );
 

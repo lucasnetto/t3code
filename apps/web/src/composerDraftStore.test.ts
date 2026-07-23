@@ -781,6 +781,7 @@ describe("composerDraftStore project draft thread mapping", () => {
         title: "Ship payments",
         workspaceProjectId,
         approvedProjectIds: [projectId, otherProjectId],
+        createTask: true,
       },
     });
 
@@ -789,6 +790,7 @@ describe("composerDraftStore project draft thread mapping", () => {
       title: "Ship payments",
       workspaceProjectId,
       approvedProjectIds: [projectId, otherProjectId],
+      createTask: true,
     });
   });
 

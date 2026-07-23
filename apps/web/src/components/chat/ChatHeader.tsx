@@ -6,7 +6,7 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { memo } from "react";
+import { memo, type ReactNode } from "react";
 import GitActionsControl from "../GitActionsControl";
 import { type DraftId } from "~/composerDraftStore";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -34,6 +34,7 @@ interface ChatHeaderProps {
   rightPanelOpen: boolean;
   gitCwd: string | null;
   gitActionsAvailable: boolean;
+  taskControls?: ReactNode;
   onRunProjectScript: (script: ProjectScript) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<ProjectScriptActionResult>;
   onUpdateProjectScript: (
@@ -70,6 +71,7 @@ export const ChatHeader = memo(function ChatHeader({
   rightPanelOpen,
   gitCwd,
   gitActionsAvailable,
+  taskControls,
   onRunProjectScript,
   onAddProjectScript,
   onUpdateProjectScript,
@@ -125,6 +127,7 @@ export const ChatHeader = memo(function ChatHeader({
           rightPanelOpen ? "pr-0" : "pr-16",
         )}
       >
+        {taskControls}
         {activeProjectScripts && (
           <ProjectScriptsControl
             scripts={activeProjectScripts}
