@@ -75,6 +75,10 @@
       "types": "./src/state/orchestration.ts",
       "default": "./src/state/orchestration.ts"
     },
+    "./state/tasks": {
+      "types": "./src/state/tasks.ts",
+      "default": "./src/state/tasks.ts"
+    },
     "./state/presentation": {
       "types": "./src/state/presentation.ts",
       "default": "./src/state/presentation.ts"

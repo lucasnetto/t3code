@@ -1,7 +1,13 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
-import { EnvironmentId, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  EnvironmentId,
+  ProjectId,
+  TaskId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 
 export const ExecutionEnvironmentPlatformOs = Schema.Literals([
   "darwin",
@@ -73,6 +79,12 @@ export const ScopedProjectRef = Schema.Struct({
   projectId: ProjectId,
 });
 export type ScopedProjectRef = typeof ScopedProjectRef.Type;
+
+export const ScopedTaskRef = Schema.Struct({
+  environmentId: EnvironmentId,
+  taskId: TaskId,
+});
+export type ScopedTaskRef = typeof ScopedTaskRef.Type;
 
 export const ScopedThreadRef = Schema.Struct({
   environmentId: EnvironmentId,

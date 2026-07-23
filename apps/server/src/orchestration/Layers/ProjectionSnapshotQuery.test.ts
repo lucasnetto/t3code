@@ -3,6 +3,7 @@ import {
   EventId,
   MessageId,
   ProjectId,
+  TaskId,
   ThreadId,
   TurnId,
   ProviderInstanceId,
@@ -1545,6 +1546,53 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       const shellSnapshot = yield* snapshotQuery.getShellSnapshot();
       assert.equal(shellSnapshot.projects.length, 0);
       assert.equal(shellSnapshot.threads.length, 0);
+    }),
+  );
+
+  it.effect("includes durable tasks in shell snapshots", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`
+        INSERT INTO projection_tasks (
+          task_id,
+          title,
+          status,
+          root_path,
+          workspace_project_id,
+          approved_project_ids_json,
+          created_at,
+          updated_at,
+          completed_at
+        )
+        VALUES (
+          'task-shell',
+          'Shell task',
+          'active',
+          '/tmp/t3/tasks/task-shell',
+          'project-task-shell',
+          '["project-api"]',
+          '2026-07-23T12:00:00.000Z',
+          '2026-07-23T12:00:00.000Z',
+          NULL
+        )
+      `;
+
+      const shellSnapshot = yield* snapshotQuery.getShellSnapshot();
+      assert.deepStrictEqual(shellSnapshot.tasks, [
+        {
+          id: TaskId.make("task-shell"),
+          title: "Shell task",
+          status: "active",
+          rootPath: "/tmp/t3/tasks/task-shell",
+          workspaceProjectId: ProjectId.make("project-task-shell"),
+          approvedProjectIds: [ProjectId.make("project-api")],
+          createdAt: "2026-07-23T12:00:00.000Z",
+          updatedAt: "2026-07-23T12:00:00.000Z",
+          completedAt: null,
+        },
+      ]);
     }),
   );
 });
