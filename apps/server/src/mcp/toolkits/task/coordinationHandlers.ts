@@ -12,6 +12,7 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
+import * as GitManager from "../../../git/GitManager.ts";
 import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
 import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -274,6 +275,84 @@ const handlers = {
         })),
         timedOut: threads.some((thread) => statusForThread(thread) === "working"),
       };
+    }),
+  task_create_pull_request: ({ threadId }) =>
+    Effect.gen(function* () {
+      const operation = "task.create_pull_request";
+      const scope = yield* requireTaskScope(operation);
+      const target = yield* requireTaskThread(scope, threadId, operation);
+      if (!target.worktreePath) {
+        return yield* failTaskTool(operation, `Thread '${threadId}' has no repository checkout.`);
+      }
+      if (target.latestTurn?.state === "running") {
+        return yield* failTaskTool(operation, `Thread '${threadId}' is still working.`);
+      }
+      const crypto = yield* Crypto.Crypto;
+      const uuid = yield* crypto.randomUUIDv4.pipe(
+        Effect.mapError(() => failTaskTool(operation, "Could not allocate an action identifier.")),
+      );
+      const git = yield* GitManager.GitManager;
+      const result = yield* git
+        .runStackedAction({
+          actionId: `task:pr:${uuid}`,
+          cwd: target.worktreePath,
+          action: "create_pr",
+        })
+        .pipe(
+          Effect.mapError((error) =>
+            failTaskTool(
+              operation,
+              error instanceof Error ? error.message : `Could not create a PR for '${threadId}'.`,
+            ),
+          ),
+        );
+      return {
+        threadId,
+        status: result.pr.status,
+        ...(result.pr.url ? { url: result.pr.url } : {}),
+        ...(result.pr.number ? { number: result.pr.number } : {}),
+        ...(result.pr.baseBranch ? { baseBranch: result.pr.baseBranch } : {}),
+        ...(result.pr.headBranch ? { headBranch: result.pr.headBranch } : {}),
+        ...(result.pr.title ? { title: result.pr.title } : {}),
+      };
+    }),
+  task_revert_thread: ({ threadId, turnCount }) =>
+    Effect.gen(function* () {
+      const operation = "task.revert_thread";
+      const scope = yield* requireTaskScope(operation);
+      const target = yield* requireTaskThread(scope, threadId, operation);
+      if (target.taskContext?.createdBy.kind !== "agent") {
+        return yield* failTaskTool(operation, "Only agent-created threads may be reverted.");
+      }
+      if (!target.worktreePath) {
+        return yield* failTaskTool(
+          operation,
+          `Thread '${threadId}' has no repository checkpoint history.`,
+        );
+      }
+      if (target.latestTurn?.state === "running") {
+        return yield* failTaskTool(operation, `Thread '${threadId}' is still working.`);
+      }
+      const crypto = yield* Crypto.Crypto;
+      const uuid = yield* crypto.randomUUIDv4.pipe(
+        Effect.mapError(() => failTaskTool(operation, "Could not allocate a command identifier.")),
+      );
+      const createdAt = DateTime.formatIso(yield* DateTime.now);
+      const engine = yield* OrchestrationEngine.OrchestrationEngineService;
+      yield* engine
+        .dispatch({
+          type: "thread.checkpoint.revert",
+          commandId: CommandId.make(`task:revert:${uuid}`),
+          threadId,
+          turnCount,
+          createdAt,
+        })
+        .pipe(
+          Effect.mapError(() =>
+            failTaskTool(operation, `Could not request a revert for '${threadId}'.`),
+          ),
+        );
+      return { threadId, turnCount, accepted: true };
     }),
 } satisfies Parameters<typeof TaskCoordinationToolkit.toLayer>[0];
 

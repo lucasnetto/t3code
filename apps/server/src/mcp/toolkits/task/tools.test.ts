@@ -15,6 +15,7 @@ import * as Option from "effect/Option";
 import { McpSchema, McpServer } from "effect/unstable/ai";
 
 import * as CheckpointDiffQuery from "../../../checkpointing/CheckpointDiffQuery.ts";
+import * as GitManager from "../../../git/GitManager.ts";
 import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
 import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -138,10 +139,16 @@ const TestLayer = McpHttpServer.TaskToolkitRegistrationLive.pipe(
 
 const makeCoordinationTestLayer = (
   dispatchedCommands: Array<import("@t3tools/contracts").OrchestrationCommand>,
+  options?: {
+    readonly query?: ProjectionSnapshotQuery.ProjectionSnapshotQuery["Service"];
+    readonly runStackedAction?: GitManager.GitManager["Service"]["runStackedAction"];
+  },
 ) =>
   McpHttpServer.TaskCoordinationToolkitRegistrationLive.pipe(
     Layer.provideMerge(McpServer.McpServer.layer),
-    Layer.provide(Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, query)),
+    Layer.provide(
+      Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, options?.query ?? query),
+    ),
     Layer.provide(
       Layer.succeed(OrchestrationEngine.OrchestrationEngineService, {
         dispatch: (command: import("@t3tools/contracts").OrchestrationCommand) =>
@@ -156,6 +163,11 @@ const makeCoordinationTestLayer = (
         GitWorkflowService.GitWorkflowService,
         {} as GitWorkflowService.GitWorkflowService["Service"],
       ),
+    ),
+    Layer.provide(
+      Layer.succeed(GitManager.GitManager, {
+        runStackedAction: options?.runStackedAction ?? (() => Effect.die("unused")),
+      } as unknown as GitManager.GitManager["Service"]),
     ),
     Layer.provide(
       Layer.succeed(
@@ -301,4 +313,149 @@ it.effect("spawns a durable agent thread with the exact caller message", () => {
       }
     }),
   ).pipe(Effect.provide(makeCoordinationTestLayer(dispatchedCommands)));
+});
+
+it.effect("creates a pull request through the target thread checkout", () => {
+  const dispatchedCommands: Array<import("@t3tools/contracts").OrchestrationCommand> = [];
+  const readyChild = {
+    ...child,
+    latestTurn: child.latestTurn
+      ? {
+          ...child.latestTurn,
+          state: "completed" as const,
+          completedAt: createdAt,
+        }
+      : null,
+  };
+  const actionInputs: Array<import("@t3tools/contracts").GitRunStackedActionInput> = [];
+  const readyQuery = {
+    ...query,
+    getShellSnapshot: () =>
+      query
+        .getShellSnapshot()
+        .pipe(Effect.map((snapshot) => ({ ...snapshot, threads: [caller, readyChild] }))),
+    getThreadShellById: (threadId: ThreadId) =>
+      Effect.succeed(
+        Option.fromNullishOr([caller, readyChild].find((candidate) => candidate.id === threadId)),
+      ),
+  } as unknown as ProjectionSnapshotQuery.ProjectionSnapshotQuery["Service"];
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const result = yield* server
+        .callTool({
+          name: "task_create_pull_request",
+          arguments: { threadId: childThreadId },
+        })
+        .pipe(
+          Effect.provideService(
+            McpInvocationContext.McpInvocationContext,
+            invocation(new Set(["task"])),
+          ),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+
+      expect(result.isError).toBe(false);
+      expect(actionInputs).toEqual([
+        {
+          actionId: expect.stringMatching(/^task:pr:/),
+          cwd: "/tmp/task/worktrees/child-api",
+          action: "create_pr",
+        },
+      ]);
+      expect(result.structuredContent).toMatchObject({
+        threadId: childThreadId,
+        status: "created",
+        url: "https://example.test/pull/42",
+        number: 42,
+      });
+    }),
+  ).pipe(
+    Effect.provide(
+      makeCoordinationTestLayer(dispatchedCommands, {
+        query: readyQuery,
+        runStackedAction: (input) =>
+          Effect.sync(() => {
+            actionInputs.push(input);
+            return {
+              action: "create_pr" as const,
+              branch: { status: "skipped_not_requested" as const },
+              commit: { status: "skipped_not_requested" as const },
+              push: { status: "pushed" as const },
+              pr: {
+                status: "created" as const,
+                url: "https://example.test/pull/42",
+                number: 42,
+                baseBranch: "main",
+                headBranch: "feature/api",
+                title: "Ship API",
+              },
+              toast: {
+                title: "Pull request created",
+                cta: {
+                  kind: "open_pr" as const,
+                  label: "Open pull request",
+                  url: "https://example.test/pull/42",
+                },
+              },
+            };
+          }),
+      }),
+    ),
+  );
+});
+
+it.effect("requests a checkpoint revert only for an idle agent-created thread", () => {
+  const dispatchedCommands: Array<import("@t3tools/contracts").OrchestrationCommand> = [];
+  const readyChild = {
+    ...child,
+    latestTurn: child.latestTurn
+      ? {
+          ...child.latestTurn,
+          state: "completed" as const,
+          completedAt: createdAt,
+        }
+      : null,
+  };
+  const readyQuery = {
+    ...query,
+    getShellSnapshot: () =>
+      query
+        .getShellSnapshot()
+        .pipe(Effect.map((snapshot) => ({ ...snapshot, threads: [caller, readyChild] }))),
+    getThreadShellById: (threadId: ThreadId) =>
+      Effect.succeed(
+        Option.fromNullishOr([caller, readyChild].find((candidate) => candidate.id === threadId)),
+      ),
+  } as unknown as ProjectionSnapshotQuery.ProjectionSnapshotQuery["Service"];
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const result = yield* server
+        .callTool({
+          name: "task_revert_thread",
+          arguments: { threadId: childThreadId, turnCount: 1 },
+        })
+        .pipe(
+          Effect.provideService(
+            McpInvocationContext.McpInvocationContext,
+            invocation(new Set(["task"])),
+          ),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+
+      expect(result.isError).toBe(false);
+      expect(dispatchedCommands).toEqual([
+        {
+          type: "thread.checkpoint.revert",
+          commandId: expect.stringMatching(/^task:revert:/),
+          threadId: childThreadId,
+          turnCount: 1,
+          createdAt: expect.any(String),
+        },
+      ]);
+    }),
+  ).pipe(Effect.provide(makeCoordinationTestLayer(dispatchedCommands, { query: readyQuery })));
 });
