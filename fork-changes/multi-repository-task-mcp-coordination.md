@@ -68,9 +68,10 @@ interruptible.
 Immediately before `thread.agent.create`, spawn resolves the caller's active
 provider runtime binding and inherits that turn's exact provider instance,
 model selection (including options), runtime mode, and interaction mode. It
-fences the binding against the MCP invocation, then synchronously confirms that
-the exact inherited instance is still enabled and registered under the same
-provider driver before creating the durable child. If that preflight fails
+fences the binding against the MCP invocation and requires the binding's active
+turn to still be the exact projected spawning turn, then synchronously confirms
+that the exact inherited instance is still enabled and registered under the
+same provider driver before creating the durable child. If that preflight fails
 after repository worktree creation, ordinary spawn compensation removes the
 worktree and no child command is dispatched. Provider turn dispatch persists
 interaction mode alongside the existing active model-selection payload so the
@@ -96,7 +97,8 @@ The coordination toolkit tests cover:
   denial on each handler;
 - active caller session and turn fencing, lineage changes during spawn, active
   task checks, exact active-session configuration inheritance despite stale
-  thread defaults, registry-based inherited-instance availability with
+  thread defaults, provider-binding active-turn mismatch rejection with
+  worktree cleanup, registry-based inherited-instance availability with
   worktree cleanup, task membership, agent-only follow-up targets, and busy
   targets;
 - task-root and repository spawn behavior, approved project validation, stable

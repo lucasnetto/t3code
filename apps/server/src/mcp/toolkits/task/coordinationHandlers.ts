@@ -57,7 +57,11 @@ function titleFromMessage(message: string): string {
 
 const requireEffectiveCallerConfiguration = Effect.fn(
   "TaskCoordinationToolkit.requireEffectiveCallerConfiguration",
-)(function* (operation: string, invocation: McpInvocationContext.McpInvocationScope) {
+)(function* (
+  operation: string,
+  invocation: McpInvocationContext.McpInvocationScope,
+  expectedActiveTurnId: TurnId,
+) {
   const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
   const bindingOption = yield* directory
     .getBinding(invocation.threadId)
@@ -85,6 +89,12 @@ const requireEffectiveCallerConfiguration = Effect.fn(
       ),
     ),
   );
+  if (activeTurn.activeTurnId !== expectedActiveTurnId) {
+    return yield* failTaskTool(
+      operation,
+      "The active calling provider turn no longer matches the spawning turn.",
+    );
+  }
   if (activeTurn.modelSelection.instanceId !== binding.providerInstanceId) {
     return yield* failTaskTool(
       operation,
@@ -385,7 +395,7 @@ const handlers = {
           );
         }
         const callerConfiguration = yield* restore(
-          requireEffectiveCallerConfiguration(operation, invocation),
+          requireEffectiveCallerConfiguration(operation, invocation, spawningTurnId),
         );
         const createCommand: Extract<OrchestrationCommand, { type: "thread.agent.create" }> = {
           type: "thread.agent.create",
