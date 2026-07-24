@@ -28,7 +28,7 @@ const TaskCoordinationThreadStatus = Schema.Struct({
 
 export const TaskSpawnThreadTool = Tool.make("task_spawn_thread", {
   description:
-    "Create a durable agent-owned T3 thread in the current task. The exact message becomes its first ordinary input. Omit projectId for the task workspace or provide an approved repository to create a new isolated worktree.",
+    "Create a durable agent-owned T3 thread in the current task. The exact message becomes its first ordinary input. Omit projectId for the task workspace or provide an approved repository to create a new isolated worktree. For repository threads, baseRef must name an existing local or remote branch; HEAD resolves to the current branch.",
   parameters: Schema.Struct({
     message: TrimmedNonEmptyString,
     projectId: Schema.optionalKey(ProjectId),

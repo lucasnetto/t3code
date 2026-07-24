@@ -3,6 +3,7 @@ import { expect, it } from "@effect/vitest";
 import {
   CommandId,
   EventId,
+  MessageId,
   ProjectId,
   ProviderInstanceId,
   TaskId,
@@ -173,6 +174,65 @@ const createTaskWithActiveUserThread = Effect.fn("createTaskWithActiveUserThread
   }
 
   return readModel;
+});
+
+const taskThreadId = ThreadId.make("thread-task-turn");
+
+const createTaskThreadReadModel = Effect.fn("createTaskThreadReadModel")(function* () {
+  let readModel = yield* projectEvent(
+    createEmptyReadModel(now),
+    projectCreated(1, ProjectId.make("project-api"), "/tmp/api"),
+  );
+  const taskEvents = yield* createTask(readModel);
+  for (const event of taskEvents) {
+    readModel = yield* projectEvent(readModel, {
+      ...event,
+      sequence: readModel.snapshotSequence + 1,
+    });
+  }
+  const threadResult = yield* decideOrchestrationCommand({
+    readModel,
+    command: {
+      type: "thread.create",
+      commandId: CommandId.make("command-task-turn-thread"),
+      threadId: taskThreadId,
+      projectId: ProjectId.make("project-task-1"),
+      taskId: TaskId.make("task-1"),
+      title: "Task coordinator",
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5.6",
+      },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdAt: now,
+    },
+  });
+  const threadEvent = Array.isArray(threadResult) ? threadResult[0] : threadResult;
+  return yield* projectEvent(readModel, {
+    ...threadEvent,
+    sequence: readModel.snapshotSequence + 1,
+  });
+});
+
+const taskTurnStartCommand = (
+  commandId: string,
+  threadId: ThreadId = taskThreadId,
+): OrchestrationCommand => ({
+  type: "thread.turn.start",
+  commandId: CommandId.make(commandId),
+  threadId,
+  message: {
+    messageId: MessageId.make(`message-${commandId}`),
+    role: "user",
+    text: "Continue the task.",
+    attachments: [],
+  },
+  runtimeMode: "full-access",
+  interactionMode: "default",
+  createdAt: now,
 });
 
 it.layer(NodeServices.layer)("task decider", (it) => {
@@ -564,6 +624,167 @@ it.layer(NodeServices.layer)("task decider", (it) => {
       );
 
       expect(result._tag).toBe("Failure");
+    }),
+  );
+
+  it.effect("serializes task-aware turn-start invariants in the decider", () =>
+    Effect.gen(function* () {
+      const base = yield* createTaskThreadReadModel();
+      const activeTurnId = TurnId.make("turn-active");
+      const session = (
+        status: "starting" | "running" | "ready",
+        sessionActiveTurnId: TurnId | null,
+      ) => ({
+        threadId: taskThreadId,
+        status,
+        providerName: "codex",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        runtimeMode: "full-access" as const,
+        activeTurnId: sessionActiveTurnId,
+        lastError: null,
+        updatedAt: now,
+      });
+      const updateTarget = (
+        readModel: OrchestrationReadModel,
+        update: Partial<OrchestrationReadModel["threads"][number]>,
+      ): OrchestrationReadModel => ({
+        ...readModel,
+        threads: readModel.threads.map((thread) =>
+          thread.id === taskThreadId ? { ...thread, ...update } : thread,
+        ),
+      });
+      const scenarios: ReadonlyArray<{
+        readonly name: string;
+        readonly readModel: OrchestrationReadModel;
+        readonly expectedDetail: string;
+      }> = [
+        {
+          name: "task enters completing before dispatch",
+          expectedDetail: "is 'completing'",
+          readModel: {
+            ...base,
+            tasks: (base.tasks ?? []).map((task) =>
+              task.id === TaskId.make("task-1") ? { ...task, status: "completing" as const } : task,
+            ),
+          },
+        },
+        {
+          name: "target is deleted",
+          expectedDetail: "is deleted",
+          readModel: updateTarget(base, { deletedAt: now }),
+        },
+        {
+          name: "target is archived",
+          expectedDetail: "is archived",
+          readModel: updateTarget(base, { archivedAt: now }),
+        },
+        {
+          name: "target is settled",
+          expectedDetail: "is settled",
+          readModel: updateTarget(base, { settledOverride: "settled", settledAt: now }),
+        },
+        {
+          name: "target session is starting",
+          expectedDetail: "active or starting turn",
+          readModel: updateTarget(base, { session: session("starting", null) }),
+        },
+        {
+          name: "target becomes running before dispatch",
+          expectedDetail: "active or starting turn",
+          readModel: updateTarget(base, { session: session("running", activeTurnId) }),
+        },
+        {
+          name: "target retains an active turn id",
+          expectedDetail: "active or starting turn",
+          readModel: updateTarget(base, { session: session("ready", activeTurnId) }),
+        },
+      ];
+
+      for (const [index, scenario] of scenarios.entries()) {
+        const result = yield* Effect.result(
+          decideOrchestrationCommand({
+            readModel: scenario.readModel,
+            command: taskTurnStartCommand(`command-task-turn-rejected-${index}`),
+          }),
+        );
+        expect(result._tag, scenario.name).toBe("Failure");
+        if (result._tag === "Failure") {
+          expect(String(result.failure), scenario.name).toContain(scenario.expectedDetail);
+        }
+      }
+
+      const accepted = yield* decideOrchestrationCommand({
+        readModel: base,
+        command: taskTurnStartCommand("command-task-turn-accepted"),
+      });
+      expect((Array.isArray(accepted) ? accepted : [accepted]).map((event) => event.type)).toEqual([
+        "thread.message-sent",
+        "thread.turn-start-requested",
+      ]);
+    }),
+  );
+
+  it.effect("does not apply task lifecycle or idle checks to standalone turn starts", () =>
+    Effect.gen(function* () {
+      const standaloneThreadId = ThreadId.make("thread-standalone");
+      let readModel = yield* projectEvent(
+        createEmptyReadModel(now),
+        projectCreated(1, ProjectId.make("project-api"), "/tmp/api"),
+      );
+      const createResult = yield* decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "thread.create",
+          commandId: CommandId.make("command-standalone-thread"),
+          threadId: standaloneThreadId,
+          projectId: ProjectId.make("project-api"),
+          title: "Standalone",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5.6",
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdAt: now,
+        },
+      });
+      const createEvent = Array.isArray(createResult) ? createResult[0] : createResult;
+      readModel = yield* projectEvent(readModel, { ...createEvent, sequence: 2 });
+      readModel = {
+        ...readModel,
+        threads: readModel.threads.map((thread) =>
+          thread.id === standaloneThreadId
+            ? {
+                ...thread,
+                archivedAt: now,
+                settledOverride: "settled" as const,
+                settledAt: now,
+                session: {
+                  threadId: standaloneThreadId,
+                  status: "running" as const,
+                  providerName: "codex",
+                  providerInstanceId: ProviderInstanceId.make("codex"),
+                  runtimeMode: "full-access" as const,
+                  activeTurnId: TurnId.make("turn-standalone"),
+                  lastError: null,
+                  updatedAt: now,
+                },
+              }
+            : thread,
+        ),
+      };
+
+      const accepted = yield* decideOrchestrationCommand({
+        readModel,
+        command: taskTurnStartCommand("command-standalone-turn", standaloneThreadId),
+      });
+      expect((Array.isArray(accepted) ? accepted : [accepted]).map((event) => event.type)).toEqual([
+        "thread.unsettled",
+        "thread.message-sent",
+        "thread.turn-start-requested",
+      ]);
     }),
   );
 });

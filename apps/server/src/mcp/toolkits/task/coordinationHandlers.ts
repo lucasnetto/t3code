@@ -64,8 +64,12 @@ const resolveSpawnBaseRef = Effect.fn("TaskCoordinationToolkit.resolveSpawnBaseR
     const resolved = resolveCurrentBranch
       ? page.refs.find((ref) => ref.current && ref.isRemote !== true)
       : page.refs.find((ref) => ref.name === requestedName);
-    if (resolved) return resolved.name;
-    if (page.nextCursor === null) break;
+    if (resolved) {
+      return resolved.name;
+    }
+    if (page.nextCursor === null) {
+      break;
+    }
     cursor = page.nextCursor;
   }
 
@@ -217,6 +221,8 @@ const handlers = {
               threadId,
               projectTitle: project.title,
             });
+            // The create call and ownership registration are one commit point:
+            // cancellation is observed only after the returned worktree is recorded.
             const worktree = yield* git.createWorktree({
               cwd: project.workspaceRoot,
               refName: resolvedBase,
@@ -252,6 +258,7 @@ const handlers = {
               "The calling provider turn changed before the task thread could be created.",
             );
           }
+          // Dispatch and ownership registration are likewise one commit point.
           yield* engine.dispatch(createCommand);
           createdThread = true;
 
