@@ -8,6 +8,8 @@ import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
 import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as ProjectSetupScriptRunner from "../../../project/ProjectSetupScriptRunner.ts";
+import * as ProviderInstanceRegistry from "../../../provider/Services/ProviderInstanceRegistry.ts";
+import * as ProviderSessionDirectory from "../../../provider/Services/ProviderSessionDirectory.ts";
 import * as TaskWorkspaceService from "../../../tasks/TaskWorkspaceService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { TaskToolError } from "./tools.ts";
@@ -42,7 +44,11 @@ export const TaskSpawnThreadTool = Tool.make("task_spawn_thread", {
     worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   }),
   failure: TaskToolError,
-  dependencies,
+  dependencies: [
+    ...dependencies,
+    ProviderInstanceRegistry.ProviderInstanceRegistry,
+    ProviderSessionDirectory.ProviderSessionDirectory,
+  ],
 })
   .annotate(Tool.Title, "Spawn task thread")
   .annotate(Tool.Readonly, false)

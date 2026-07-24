@@ -1254,6 +1254,11 @@ routing.layer("ProviderServiceLive routing", (it) => {
         threadId: session.threadId,
         input: "hello",
         attachments: [],
+        modelSelection: {
+          instanceId: codexInstanceId,
+          model: "gpt-runtime",
+        },
+        interactionMode: "plan",
       });
 
       const runningRuntime = yield* runtimeRepository.getByThreadId({
@@ -1272,12 +1277,22 @@ routing.layer("ProviderServiceLive routing", (it) => {
             activeTurnId: string | null;
             lastError: string | null;
             lastRuntimeEvent: string | null;
+            interactionMode: string | null;
+            modelSelection: {
+              instanceId: string;
+              model: string;
+            };
           };
           assert.equal(runtimePayload.cwd, session.cwd);
           assert.equal(runtimePayload.model, null);
           assert.equal(runtimePayload.activeTurnId, `turn-${String(session.threadId)}`);
           assert.equal(runtimePayload.lastError, null);
           assert.equal(runtimePayload.lastRuntimeEvent, "provider.sendTurn");
+          assert.equal(runtimePayload.interactionMode, "plan");
+          assert.deepEqual(runtimePayload.modelSelection, {
+            instanceId: codexInstanceId,
+            model: "gpt-runtime",
+          });
         }
       }
     }),
