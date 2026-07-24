@@ -16,7 +16,7 @@ import {
   type DraftThreadState,
   useComposerDraftStore,
 } from "../composerDraftStore";
-import { newDraftId, newThreadId } from "../lib/utils";
+import { newDraftId, newProjectId, newTaskId, newThreadId } from "../lib/utils";
 import { orderItemsByPreferredIds } from "../components/Sidebar.logic";
 import {
   deriveLogicalProjectKeyFromSettings,
@@ -187,6 +187,51 @@ export function useNewThreadHandler() {
       })();
     },
     [getCurrentRouteTarget, projectGroupingSettings, projects, router, serverConfigs],
+  );
+}
+
+export function useNewTaskHandler() {
+  const router = useRouter();
+
+  return useCallback(
+    async (input: {
+      title: string;
+      approvedProjects: ReadonlyArray<ScopedProjectRef>;
+    }): Promise<void> => {
+      const anchorProject = input.approvedProjects[0];
+      if (!anchorProject) {
+        return;
+      }
+      const draftId = newDraftId();
+      const threadId = newThreadId();
+      const taskId = newTaskId();
+      const workspaceProjectId = newProjectId();
+      const createdAt = new Date().toISOString();
+      const { applyStickyState, setLogicalProjectDraftThreadId } = useComposerDraftStore.getState();
+
+      setLogicalProjectDraftThreadId(`task-draft:${taskId}`, anchorProject, draftId, {
+        threadId,
+        createdAt,
+        branch: null,
+        worktreePath: null,
+        envMode: "local",
+        startFromOrigin: false,
+        runtimeMode: DEFAULT_RUNTIME_MODE,
+        taskDraft: {
+          taskId,
+          title: input.title,
+          workspaceProjectId,
+          approvedProjectIds: input.approvedProjects.map((project) => project.projectId),
+        },
+      });
+      applyStickyState(draftId);
+
+      await router.navigate({
+        to: "/draft/$draftId",
+        params: { draftId },
+      });
+    },
+    [router],
   );
 }
 

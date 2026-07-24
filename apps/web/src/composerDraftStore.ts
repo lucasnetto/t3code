@@ -15,6 +15,7 @@ import {
   type ServerProvider,
   type ScopedProjectRef,
   type ScopedThreadRef,
+  TaskId,
   ThreadId,
 } from "@t3tools/contracts";
 import {
@@ -60,6 +61,57 @@ export const COMPOSER_DRAFT_STORAGE_KEY = "t3code:composer-drafts:v1";
 const COMPOSER_DRAFT_STORAGE_VERSION = 8;
 const DraftThreadEnvModeSchema = Schema.Literals(["local", "worktree"]);
 export type DraftThreadEnvMode = typeof DraftThreadEnvModeSchema.Type;
+
+export const TaskDraftContext = Schema.Struct({
+  taskId: TaskId,
+  title: Schema.String,
+  workspaceProjectId: ProjectId,
+  approvedProjectIds: Schema.Array(ProjectId),
+});
+export type TaskDraftContext = typeof TaskDraftContext.Type;
+const isTaskDraftContext = Schema.is(TaskDraftContext);
+
+export interface TaskDraftRepositoryRecovery {
+  readonly taskDraft: TaskDraftContext;
+  readonly anchorProjectId: ProjectId | null;
+  readonly changed: boolean;
+}
+
+/**
+ * Reconciles persisted task approvals with the repositories the current shell
+ * still exposes. The approved set is an allow-list: recovery may remove stale
+ * entries, but it must never grant a newly discovered repository.
+ */
+export function reconcileTaskDraftRepositories(input: {
+  readonly taskDraft: TaskDraftContext;
+  readonly anchorProjectId: ProjectId;
+  readonly availableProjectIds: ReadonlyArray<ProjectId>;
+}): TaskDraftRepositoryRecovery {
+  const availableProjectIds = new Set(input.availableProjectIds);
+  const approvedProjectIds = input.taskDraft.approvedProjectIds.filter((projectId) =>
+    availableProjectIds.has(projectId),
+  );
+  const anchorProjectId = approvedProjectIds.includes(input.anchorProjectId)
+    ? input.anchorProjectId
+    : (approvedProjectIds[0] ?? null);
+  const approvalsChanged =
+    approvedProjectIds.length !== input.taskDraft.approvedProjectIds.length ||
+    approvedProjectIds.some(
+      (projectId, index) => projectId !== input.taskDraft.approvedProjectIds[index],
+    );
+
+  return {
+    taskDraft: approvalsChanged
+      ? {
+          ...input.taskDraft,
+          approvedProjectIds,
+        }
+      : input.taskDraft,
+    anchorProjectId,
+    changed:
+      approvalsChanged || (anchorProjectId !== null && anchorProjectId !== input.anchorProjectId),
+  };
+}
 
 export const DraftId = Schema.String.pipe(Schema.brand("DraftId"));
 export type DraftId = typeof DraftId.Type;
@@ -216,6 +268,7 @@ const PersistedDraftThreadState = Schema.Struct({
   worktreePath: Schema.NullOr(Schema.String),
   envMode: DraftThreadEnvModeSchema,
   startFromOrigin: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  taskDraft: Schema.optionalKey(TaskDraftContext),
   promotedTo: Schema.optionalKey(
     Schema.NullOr(
       Schema.Struct({
@@ -295,6 +348,7 @@ export interface DraftSessionState {
   worktreePath: string | null;
   envMode: DraftThreadEnvMode;
   startFromOrigin: boolean;
+  taskDraft?: TaskDraftContext;
   promotedTo?: ScopedThreadRef | null;
 }
 
@@ -359,6 +413,7 @@ interface ComposerDraftStoreState {
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
+      taskDraft?: TaskDraftContext;
     },
   ) => void;
   /** Creates or updates the draft session tracked for a concrete project ref. */
@@ -374,6 +429,7 @@ interface ComposerDraftStoreState {
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
+      taskDraft?: TaskDraftContext;
     },
   ) => void;
   /** Updates mutable draft-session metadata without touching composer content. */
@@ -388,6 +444,7 @@ interface ComposerDraftStoreState {
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
+      taskDraft?: TaskDraftContext | null;
     },
   ) => void;
   clearProjectDraftThreadId: (projectRef: ScopedProjectRef) => void;
@@ -1322,6 +1379,7 @@ function createDraftThreadState(
     startFromOrigin?: boolean;
     runtimeMode?: RuntimeMode;
     interactionMode?: ProviderInteractionMode;
+    taskDraft?: TaskDraftContext;
   },
 ): DraftThreadState {
   const projectChanged =
@@ -1346,6 +1404,7 @@ function createDraftThreadState(
         ? false
         : (existingThread?.startFromOrigin ?? false)
       : options.startFromOrigin;
+  const nextTaskDraft = options?.taskDraft ?? existingThread?.taskDraft;
   return {
     threadId,
     environmentId: projectRef.environmentId,
@@ -1365,6 +1424,7 @@ function createDraftThreadState(
           ? "local"
           : (existingThread?.envMode ?? "local")),
     startFromOrigin: nextStartFromOrigin,
+    ...(nextTaskDraft ? { taskDraft: nextTaskDraft } : {}),
     promotedTo: null,
   };
 }
@@ -1397,6 +1457,7 @@ function draftThreadsEqual(left: DraftThreadState | undefined, right: DraftThrea
     left.worktreePath === right.worktreePath &&
     left.envMode === right.envMode &&
     left.startFromOrigin === right.startFromOrigin &&
+    JSON.stringify(left.taskDraft ?? null) === JSON.stringify(right.taskDraft ?? null) &&
     scopedThreadRefsEqual(left.promotedTo, right.promotedTo)
   );
 }
@@ -1492,6 +1553,9 @@ function normalizePersistedDraftThreads(
       const branch = candidateDraftThread.branch;
       const worktreePath = candidateDraftThread.worktreePath;
       const startFromOrigin = candidateDraftThread.startFromOrigin === true;
+      const taskDraft = isTaskDraftContext(candidateDraftThread.taskDraft)
+        ? candidateDraftThread.taskDraft
+        : undefined;
       const normalizedWorktreePath = typeof worktreePath === "string" ? worktreePath : null;
       const promotedToCandidate = candidateDraftThread.promotedTo;
       const promotedToRecord =
@@ -1540,6 +1604,7 @@ function normalizePersistedDraftThreads(
         worktreePath: normalizedWorktreePath,
         envMode: normalizeDraftThreadEnvMode(candidateDraftThread.envMode, normalizedWorktreePath),
         startFromOrigin,
+        ...(taskDraft ? { taskDraft } : {}),
         promotedTo,
       };
     }
@@ -2157,6 +2222,7 @@ function toHydratedDraftThreadState(
     worktreePath: persistedDraftThread.worktreePath,
     envMode: persistedDraftThread.envMode,
     startFromOrigin: persistedDraftThread.startFromOrigin,
+    ...(persistedDraftThread.taskDraft ? { taskDraft: persistedDraftThread.taskDraft } : {}),
     promotedTo: persistedDraftThread.promotedTo
       ? scopeThreadRef(
           persistedDraftThread.promotedTo.environmentId as EnvironmentId,
@@ -2369,6 +2435,11 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                     ? "local"
                     : (existing.envMode ?? "local")),
               startFromOrigin: nextStartFromOrigin,
+              ...(options.taskDraft === null
+                ? {}
+                : {
+                    taskDraft: options.taskDraft ?? existing.taskDraft,
+                  }),
               promotedTo: existing.promotedTo ?? null,
             };
             const isUnchanged =
@@ -2382,6 +2453,8 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               nextDraftThread.worktreePath === existing.worktreePath &&
               nextDraftThread.envMode === existing.envMode &&
               nextDraftThread.startFromOrigin === existing.startFromOrigin &&
+              JSON.stringify(nextDraftThread.taskDraft ?? null) ===
+                JSON.stringify(existing.taskDraft ?? null) &&
               scopedThreadRefsEqual(nextDraftThread.promotedTo, existing.promotedTo);
             if (isUnchanged) {
               return state;

@@ -25,11 +25,17 @@ export function createEnvironmentProjectAtoms(input: {
     environmentId: EnvironmentId,
   ) => Atom.Atom<OrchestrationShellSnapshot | null>;
 }) {
+  const environmentAllProjectsAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make(
+      (get): ReadonlyArray<OrchestrationProjectShell> =>
+        get(input.snapshotAtom(environmentId))?.projects ?? EMPTY_PROJECTS,
+    ).pipe(Atom.withLabel(`environment-all-projects:${environmentId}`)),
+  );
+
   const environmentProjectsAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make(
       (get): ReadonlyArray<OrchestrationProjectShell> =>
-        get(input.snapshotAtom(environmentId))?.projects.filter(isOrdinaryProjectShell) ??
-        EMPTY_PROJECTS,
+        get(environmentAllProjectsAtom(environmentId)).filter(isOrdinaryProjectShell),
     ).pipe(Atom.withLabel(`environment-projects:${environmentId}`)),
   );
 
@@ -50,7 +56,7 @@ export function createEnvironmentProjectAtoms(input: {
    */
   const environmentProjectIncludingInternalIndexAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get): ReadonlyMap<ProjectId, OrchestrationProjectShell> => {
-      const projects = get(input.snapshotAtom(environmentId))?.projects ?? EMPTY_PROJECTS;
+      const projects = get(environmentAllProjectsAtom(environmentId));
       if (projects.length === 0) {
         return EMPTY_PROJECT_INDEX;
       }
@@ -132,6 +138,7 @@ export function createEnvironmentProjectAtoms(input: {
   }).pipe(Atom.withLabel("environment-project-list"));
 
   return {
+    environmentAllProjectsAtom,
     environmentProjectsAtom,
     environmentProjectIndexAtom,
     environmentProjectIncludingInternalIndexAtom,

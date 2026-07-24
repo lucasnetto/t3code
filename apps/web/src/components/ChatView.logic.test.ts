@@ -17,6 +17,8 @@ import {
   buildThreadTurnInterruptInput,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
+  deriveRepositoryUiContext,
+  taskDraftRepositorySendBlockReason,
   getStartedThreadModelChangeBlockReason,
   hasServerAcknowledgedLocalDispatch,
   isAgentCreatedTaskThread,
@@ -189,6 +191,102 @@ describe("resolveThreadUiReadOnlyReason", () => {
         routeKind: "draft",
         thread: makeThread(),
         shell: null,
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("deriveRepositoryUiContext", () => {
+  const projectRef = { environmentId, projectId };
+
+  it("disconnects a task draft from its temporary repository anchor", () => {
+    expect(
+      deriveRepositoryUiContext({
+        isTaskDraft: true,
+        projectRef,
+        projectCwd: "/repos/temporary-anchor",
+        worktreePath: "/worktrees/temporary-anchor",
+        storedRightPanelOpen: true,
+        storedTerminalOpen: true,
+      }),
+    ).toEqual({
+      projectRef: null,
+      projectCwd: null,
+      worktreePath: null,
+      rightPanelOpen: false,
+      terminalOpen: false,
+    });
+  });
+
+  it("preserves repository UI state for ordinary thread drafts", () => {
+    expect(
+      deriveRepositoryUiContext({
+        isTaskDraft: false,
+        projectRef,
+        projectCwd: "/repos/project",
+        worktreePath: "/worktrees/thread",
+        storedRightPanelOpen: true,
+        storedTerminalOpen: true,
+      }),
+    ).toEqual({
+      projectRef,
+      projectCwd: "/repos/project",
+      worktreePath: "/worktrees/thread",
+      rightPanelOpen: true,
+      terminalOpen: true,
+    });
+  });
+});
+
+describe("taskDraftRepositorySendBlockReason", () => {
+  it("blocks first send while repository eligibility is still loading", () => {
+    expect(
+      taskDraftRepositorySendBlockReason({
+        isTaskDraft: true,
+        repositoriesLoaded: false,
+        recoveryChanged: false,
+        approvedProjectCount: 1,
+      }),
+    ).toContain("finish loading");
+  });
+
+  it("blocks a first send that still contains stale repository ids", () => {
+    expect(
+      taskDraftRepositorySendBlockReason({
+        isTaskDraft: true,
+        repositoriesLoaded: true,
+        recoveryChanged: true,
+        approvedProjectCount: 1,
+      }),
+    ).toContain("list changed");
+  });
+
+  it("explains how to recover when no approved repositories remain", () => {
+    expect(
+      taskDraftRepositorySendBlockReason({
+        isTaskDraft: true,
+        repositoriesLoaded: true,
+        recoveryChanged: false,
+        approvedProjectCount: 0,
+      }),
+    ).toContain("New task");
+  });
+
+  it("allows a reconciled task draft and every ordinary thread", () => {
+    expect(
+      taskDraftRepositorySendBlockReason({
+        isTaskDraft: true,
+        repositoriesLoaded: true,
+        recoveryChanged: false,
+        approvedProjectCount: 2,
+      }),
+    ).toBeNull();
+    expect(
+      taskDraftRepositorySendBlockReason({
+        isTaskDraft: false,
+        repositoriesLoaded: false,
+        recoveryChanged: true,
+        approvedProjectCount: 0,
       }),
     ).toBeNull();
   });
