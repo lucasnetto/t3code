@@ -87,6 +87,7 @@ import {
   useRelativeTimeTick,
 } from "./settingsLayout";
 import { ProjectFavicon } from "../ProjectFavicon";
+import { buildArchivedThreadGroups } from "./archivedThreadGroups";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { isThemePreference, THEME_OPTIONS } from "../../lib/themePreferences";
 
@@ -1430,55 +1431,10 @@ export function ArchivedThreadsPanel() {
     refresh: refreshArchivedThreads,
   } = useArchivedThreadSnapshots(environmentIds);
 
-  const archivedGroups = useMemo(() => {
-    const projectsByEnvironmentAndId = new Map(
-      archivedSnapshots.flatMap(({ environmentId, snapshot }) =>
-        snapshot.projects.map(
-          (project) =>
-            [
-              `${environmentId}:${project.id}`,
-              {
-                id: project.id,
-                environmentId,
-                name: project.title,
-                cwd: project.workspaceRoot,
-              },
-            ] as const,
-        ),
-      ),
-    );
-    const threads = archivedSnapshots.flatMap(({ environmentId, snapshot }) =>
-      snapshot.threads.map((thread) => ({
-        ...thread,
-        environmentId,
-      })),
-    );
-
-    const archivedProjects = Array.from(projectsByEnvironmentAndId.values());
-    const groups: Array<{
-      readonly project: (typeof archivedProjects)[number];
-      readonly threads: Array<(typeof threads)[number]>;
-    }> = [];
-    for (const project of archivedProjects) {
-      const projectThreads: Array<(typeof threads)[number]> = [];
-      for (const thread of threads) {
-        if (thread.projectId === project.id && thread.environmentId === project.environmentId) {
-          projectThreads.push(thread);
-        }
-      }
-      if (projectThreads.length > 0) {
-        groups.push({
-          project,
-          threads: projectThreads.toSorted((left, right) => {
-            const leftKey = left.archivedAt ?? left.createdAt;
-            const rightKey = right.archivedAt ?? right.createdAt;
-            return rightKey.localeCompare(leftKey) || right.id.localeCompare(left.id);
-          }),
-        });
-      }
-    }
-    return groups;
-  }, [archivedSnapshots]);
+  const archivedGroups = useMemo(
+    () => buildArchivedThreadGroups(archivedSnapshots),
+    [archivedSnapshots],
+  );
 
   const handleArchivedThreadContextMenu = useCallback(
     async (threadRef: ScopedThreadRef, position: { x: number; y: number }) => {
@@ -1555,11 +1511,15 @@ export function ArchivedThreadsPanel() {
           />
         </SettingsSection>
       ) : (
-        archivedGroups.map(({ project, threads: projectThreads }) => (
+        archivedGroups.map(({ key, project, threads: projectThreads, title }) => (
           <SettingsSection
-            key={project.id}
-            title={project.name}
-            icon={<ProjectFavicon environmentId={project.environmentId} cwd={project.cwd} />}
+            key={key}
+            title={title}
+            icon={
+              project ? (
+                <ProjectFavicon environmentId={project.environmentId} cwd={project.cwd} />
+              ) : undefined
+            }
           >
             {projectThreads.map((thread) => (
               <SettingsRow

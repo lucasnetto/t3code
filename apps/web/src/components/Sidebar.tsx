@@ -78,9 +78,9 @@ import { isTerminalFocused } from "../lib/terminalFocus";
 import { isMacPlatform } from "../lib/utils";
 import {
   readThreadShell,
-  useProject,
   useProjects,
   useServerConfigs,
+  useThreadProject,
   useThreadShells,
   useThreadShellsForProjectRefs,
 } from "../state/entities";
@@ -410,12 +410,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
   // For grouped projects, the thread may belong to a different environment
   // than the representative project.  Look up the thread's own project cwd
   // so git status (and thus PR detection) queries the correct path.
-  const threadProject = useProject(
-    useMemo(
-      () => scopeProjectRef(thread.environmentId, thread.projectId),
-      [thread.environmentId, thread.projectId],
-    ),
-  );
+  const threadProject = useThreadProject(thread);
   const threadProjectCwd = threadProject?.workspaceRoot ?? null;
   const gitCwd = thread.worktreePath ?? threadProjectCwd ?? props.projectCwd;
   const gitStatus = useEnvironmentQuery(

@@ -22,7 +22,7 @@ import {
 import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
 import { usePaginatedBranches } from "../state/queries";
-import { useProject, useThread } from "../state/entities";
+import { useProject, useThread, useThreadProject } from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
 import { threadEnvironment } from "../state/threads";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -132,12 +132,12 @@ export function BranchToolbarBranchSelector({
   );
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
 
-  const activeProjectRef = serverThread
-    ? scopeProjectRef(serverThread.environmentId, serverThread.projectId)
-    : draftThread
-      ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
-      : null;
-  const activeProject = useProject(activeProjectRef);
+  const serverProject = useThreadProject(serverThread);
+  const draftProjectRef = draftThread
+    ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
+    : null;
+  const draftProject = useProject(draftProjectRef);
+  const activeProject = serverThread ? serverProject : draftProject;
 
   const activeThreadId = serverThread?.id ?? (draftThread ? threadId : undefined);
   const activeThreadBranch =

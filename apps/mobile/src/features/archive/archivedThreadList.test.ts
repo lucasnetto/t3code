@@ -1,6 +1,10 @@
 import type { ArchivedSnapshotEntry } from "@t3tools/client-runtime/state/threads";
-import type { OrchestrationProjectShell, OrchestrationThreadShell } from "@t3tools/contracts";
-import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import type {
+  OrchestrationProjectShell,
+  OrchestrationTask,
+  OrchestrationThreadShell,
+} from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, ProviderInstanceId, TaskId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { buildArchivedThreadGroups } from "./archivedThreadList";
@@ -50,11 +54,13 @@ function makeSnapshot(
   projects: ReadonlyArray<OrchestrationProjectShell>,
   threads: ReadonlyArray<OrchestrationThreadShell>,
   targetEnvironmentId = environmentId,
+  tasks: ReadonlyArray<OrchestrationTask> = [],
 ): ArchivedSnapshotEntry {
   return {
     environmentId: targetEnvironmentId,
     snapshot: {
       snapshotSequence: 1,
+      tasks,
       projects,
       threads,
       updatedAt: "2026-06-04T00:00:00.000Z",
@@ -120,8 +126,56 @@ describe("buildArchivedThreadGroups", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0]?.project.environmentId).toBe(environmentId);
+    expect(result[0]?.project?.environmentId).toBe(environmentId);
     expect(result[0]?.threads.map((thread) => thread.id)).toEqual(["thread-1"]);
+  });
+
+  it("keeps archived task threads accessible without exposing their internal project", () => {
+    const project = makeProject({
+      id: ProjectId.make("project-task-internal"),
+      title: "Task workspace",
+      workspaceRoot: "/private/task-workspaces/task-1",
+      visibility: "internal-task",
+    });
+    const taskId = TaskId.make("task-1");
+    const thread = makeThread({
+      id: ThreadId.make("thread-task-root"),
+      projectId: project.id,
+      title: "Coordinate the release",
+      taskContext: {
+        taskId,
+        createdBy: { kind: "user" },
+      },
+    });
+    const task: OrchestrationTask = {
+      id: taskId,
+      title: "Release coordination",
+      status: "active",
+      rootPath: "/private/task-workspaces/task-1",
+      workspaceProjectId: project.id,
+      approvedProjectIds: [],
+      createdAt: "2026-06-01T00:00:00.000Z",
+      updatedAt: "2026-06-01T00:00:00.000Z",
+      completedAt: null,
+    };
+
+    const result = buildArchivedThreadGroups({
+      snapshots: [makeSnapshot([project], [thread], environmentId, [task])],
+      environmentLabels: {},
+      environmentId: null,
+      searchQuery: "release coordination",
+      sortOrder: "newest",
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      environmentId,
+      kind: "task",
+      project: null,
+      title: "Task · Release coordination",
+    });
+    expect(result[0]?.threads.map((candidate) => candidate.id)).toEqual(["thread-task-root"]);
+    expect(JSON.stringify(result)).not.toContain(project.workspaceRoot);
   });
 
   it("ignores non-archived entries returned in a snapshot", () => {

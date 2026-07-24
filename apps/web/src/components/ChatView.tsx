@@ -200,6 +200,7 @@ import {
   useProject,
   useProjects,
   useThread,
+  useThreadProject,
   useThreadProposedPlans,
   useThreadRefs,
 } from "../state/entities";
@@ -582,12 +583,12 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
   const closeTerminalMutation = useAtomCommand(terminalEnvironment.close, "terminal close");
   const serverThread = useThread(threadRef);
   const draftThread = useComposerDraftStore((store) => store.getDraftThreadByRef(threadRef));
-  const projectRef = serverThread
-    ? scopeProjectRef(serverThread.environmentId, serverThread.projectId)
-    : draftThread
-      ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
-      : null;
-  const project = useProject(projectRef);
+  const serverProject = useThreadProject(serverThread);
+  const draftProjectRef = draftThread
+    ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
+    : null;
+  const draftProject = useProject(draftProjectRef);
+  const project = serverThread ? serverProject : draftProject;
   const terminalUiState = useTerminalUiStateStore((state) =>
     selectThreadTerminalUiState(state.terminalUiStateByThreadKey, threadRef),
   );
@@ -938,12 +939,12 @@ const PersistentThreadTerminalPanel = memo(function PersistentThreadTerminalPane
 }: PersistentThreadTerminalPanelProps) {
   const serverThread = useThread(threadRef);
   const draftThread = useComposerDraftStore((store) => store.getDraftThreadByRef(threadRef));
-  const projectRef = serverThread
-    ? scopeProjectRef(serverThread.environmentId, serverThread.projectId)
-    : draftThread
-      ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
-      : null;
-  const project = useProject(projectRef);
+  const serverProject = useThreadProject(serverThread);
+  const draftProjectRef = draftThread
+    ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
+    : null;
+  const draftProject = useProject(draftProjectRef);
+  const project = serverThread ? serverProject : draftProject;
   const knownTerminalSessions = useKnownTerminalSessions({
     environmentId: threadRef.environmentId,
     threadId: threadRef.threadId,
@@ -1515,7 +1516,7 @@ function ChatViewContent(props: ChatViewProps) {
   const activeProjectRef = activeThread
     ? scopeProjectRef(activeThread.environmentId, activeThread.projectId)
     : null;
-  const activeProject = useProject(activeProjectRef);
+  const activeProject = useThreadProject(activeThread ?? null);
   const activeEnvironmentShell = useEnvironmentQuery(
     activeThread ? environmentShell.stateAtom(activeThread.environmentId) : null,
   );

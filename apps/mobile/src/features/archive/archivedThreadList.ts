@@ -1,4 +1,5 @@
 import type { ArchivedSnapshotEntry } from "@t3tools/client-runtime/state/threads";
+import { isOrdinaryProjectShell } from "@t3tools/client-runtime/state/projects";
 import {
   scopeProject,
   scopeThreadShell,
@@ -15,7 +16,10 @@ export type ArchivedThreadSortOrder = "newest" | "oldest";
 
 export interface ArchivedThreadGroup {
   readonly key: string;
-  readonly project: EnvironmentProject;
+  readonly environmentId: EnvironmentId;
+  readonly kind: "project" | "task";
+  readonly project: EnvironmentProject | null;
+  readonly title: string;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
 }
 
@@ -26,6 +30,17 @@ function archiveTimestamp(thread: EnvironmentThreadShell): number {
 
 function matchesQuery(value: string | null, query: string): boolean {
   return value?.toLocaleLowerCase().includes(query) ?? false;
+}
+
+function taskTitle(
+  tasks: NonNullable<ArchivedSnapshotEntry["snapshot"]["tasks"]>,
+  taskId: string | null,
+): string {
+  if (taskId === null) {
+    return "Task threads";
+  }
+  const task = tasks.find((candidate) => candidate.id === taskId);
+  return task ? `Task · ${task.title}` : "Task threads";
 }
 
 export function buildArchivedThreadGroups(input: {
@@ -57,6 +72,54 @@ export function buildArchivedThreadGroups(input: {
     for (const rawProject of entry.snapshot.projects) {
       const project = scopeProject(entry.environmentId, rawProject);
       const projectThreads = threadsByProjectId.get(project.id) ?? [];
+      if (!isOrdinaryProjectShell(rawProject)) {
+        const taskThreadsById = new Map<string | null, EnvironmentThreadShell[]>();
+        for (const thread of projectThreads) {
+          const taskId = thread.taskContext?.taskId ?? null;
+          const taskThreads = taskThreadsById.get(taskId) ?? [];
+          taskThreads.push(thread);
+          taskThreadsById.set(taskId, taskThreads);
+        }
+
+        for (const [taskId, taskThreads] of taskThreadsById) {
+          const title = taskTitle(entry.snapshot.tasks ?? [], taskId);
+          const groupMatches =
+            query.length === 0 ||
+            matchesQuery(title, query) ||
+            matchesQuery(environmentLabel, query);
+          const matchingThreads = groupMatches
+            ? taskThreads
+            : taskThreads.filter(
+                (thread) => matchesQuery(thread.title, query) || matchesQuery(thread.branch, query),
+              );
+          if (matchingThreads.length === 0) {
+            continue;
+          }
+
+          const timestampOrder =
+            input.sortOrder === "newest" ? Order.flip(Order.Number) : Order.Number;
+          groups.push({
+            key: `${entry.environmentId}:task:${taskId ?? project.id}`,
+            environmentId: entry.environmentId,
+            kind: "task",
+            project: null,
+            title,
+            threads: Arr.sort(
+              matchingThreads,
+              Order.mapInput(
+                Order.Struct({ timestamp: timestampOrder, title: Order.String, id: Order.String }),
+                (thread: EnvironmentThreadShell) => ({
+                  timestamp: archiveTimestamp(thread),
+                  title: thread.title,
+                  id: thread.id,
+                }),
+              ),
+            ),
+          });
+        }
+        continue;
+      }
+
       const groupMatches =
         query.length === 0 ||
         matchesQuery(project.title, query) ||
@@ -75,7 +138,10 @@ export function buildArchivedThreadGroups(input: {
       const timestampOrder = input.sortOrder === "newest" ? Order.flip(Order.Number) : Order.Number;
       groups.push({
         key: scopedProjectKey(project.environmentId, project.id),
+        environmentId: entry.environmentId,
+        kind: "project",
         project,
+        title: project.title,
         threads: Arr.sort(
           matchingThreads,
           Order.mapInput(
@@ -98,7 +164,7 @@ export function buildArchivedThreadGroups(input: {
       Order.Struct({ timestamp: timestampOrder, title: Order.String, key: Order.String }),
       (group: ArchivedThreadGroup) => ({
         timestamp: group.threads[0] ? archiveTimestamp(group.threads[0]) : 0,
-        title: group.project.title,
+        title: group.title,
         key: group.key,
       }),
     ),
