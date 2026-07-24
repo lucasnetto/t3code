@@ -78,9 +78,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
 ) {
   const crypto = yield* Crypto.Crypto;
   const environment = yield* ServerEnvironment.ServerEnvironment;
-  const projectionSnapshotQuery = yield* Effect.serviceOption(
-    ProjectionSnapshotQuery.ProjectionSnapshotQuery,
-  );
+  const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const environmentId = yield* environment.getEnvironmentId;
   const httpServer = yield* HttpServer.HttpServer;
   const state = yield* SynchronizedRef.make<RegistryState>({ records: new Map() });
@@ -98,28 +96,21 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       .pipe(Effect.map(bytesToHex), Effect.orDie);
 
   const capabilitiesForThread = (threadId: ThreadId) =>
-    Option.match(projectionSnapshotQuery, {
-      onNone: () =>
-        Effect.succeed<ReadonlySet<McpInvocationContext.McpCapability>>(new Set(["preview"])),
-      onSome: (query) =>
-        query.getThreadShellById(threadId).pipe(
-          Effect.map((thread) => {
-            const capabilities = new Set<McpInvocationContext.McpCapability>(["preview"]);
-            if (Option.isSome(thread) && thread.value.taskContext?.createdBy.kind === "user") {
-              capabilities.add("task");
-            }
-            return capabilities;
-          }),
-          Effect.catch((cause) =>
-            Effect.logWarning("Failed to resolve MCP task capability", {
-              threadId,
-              cause,
-            }).pipe(
-              Effect.as<ReadonlySet<McpInvocationContext.McpCapability>>(new Set(["preview"])),
-            ),
-          ),
-        ),
-    });
+    projectionSnapshotQuery.getThreadShellById(threadId).pipe(
+      Effect.map((thread) => {
+        const capabilities = new Set<McpInvocationContext.McpCapability>(["preview"]);
+        if (Option.isSome(thread) && thread.value.taskContext?.createdBy.kind === "user") {
+          capabilities.add("task");
+        }
+        return capabilities;
+      }),
+      Effect.catch((cause) =>
+        Effect.logWarning("Failed to resolve MCP task capability", {
+          threadId,
+          cause,
+        }).pipe(Effect.as<ReadonlySet<McpInvocationContext.McpCapability>>(new Set(["preview"]))),
+      ),
+    );
 
   const pruneExpired = (records: ReadonlyMap<string, CredentialRecord>, timestamp: number) => {
     const next = new Map(
