@@ -1510,16 +1510,11 @@ it.effect("spawns a durable agent thread with the exact caller message", () => {
 
 it.effect("creates a pull request through the target thread checkout", () => {
   const dispatchedCommands: Array<import("@t3tools/contracts").OrchestrationCommand> = [];
-  const readyChild = {
-    ...child,
-    latestTurn: child.latestTurn
-      ? {
-          ...child.latestTurn,
-          state: "completed" as const,
-          completedAt: createdAt,
-        }
-      : null,
-  };
+  const readyChild = thread(
+    childThreadId,
+    { kind: "agent" },
+    { sessionStatus: "ready", latestTurnState: "completed" },
+  );
   const actionInputs: Array<import("@t3tools/contracts").GitRunStackedActionInput> = [];
   const readyQuery = {
     ...query,
@@ -1533,9 +1528,15 @@ it.effect("creates a pull request through the target thread checkout", () => {
       ),
   } as unknown as ProjectionSnapshotQuery.ProjectionSnapshotQuery["Service"];
   const gitManager = {
-    runStackedAction: (input: import("@t3tools/contracts").GitRunStackedActionInput) =>
-      Effect.sync(() => {
+    runStackedAction: (
+      input: import("@t3tools/contracts").GitRunStackedActionInput,
+      options?: GitManager.GitRunStackedActionOptions,
+    ) =>
+      Effect.gen(function* () {
         actionInputs.push(input);
+        if (options?.beforeRemoteMutation) {
+          yield* options.beforeRemoteMutation;
+        }
         return {
           action: "create_pr" as const,
           branch: { status: "skipped_not_requested" as const },
@@ -1597,6 +1598,134 @@ it.effect("creates a pull request through the target thread checkout", () => {
       makeCoordinationTestLayer(
         dispatchedCommands,
         readyQuery,
+        {} as GitWorkflowService.GitWorkflowService["Service"],
+        undefined,
+        {} as ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"],
+        gitManager,
+      ),
+    ),
+  );
+});
+
+it.effect("rejects pull request creation for a task-root thread", () => {
+  const dispatchedCommands: Array<import("@t3tools/contracts").OrchestrationCommand> = [];
+  let actionCalls = 0;
+  const gitManager = {
+    runStackedAction: () => {
+      actionCalls += 1;
+      return Effect.die("task-root threads must not start a pull request workflow");
+    },
+  } as unknown as GitManager.GitManager["Service"];
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const result = yield* server
+        .callTool({
+          name: "task_create_pull_request",
+          arguments: { threadId: callerThreadId },
+        })
+        .pipe(
+          Effect.provideService(
+            McpInvocationContext.McpInvocationContext,
+            invocation(new Set(["task"])),
+          ),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+
+      expect(result.isError).toBe(true);
+      expect(actionCalls).toBe(0);
+      expect(toolErrorText(result)).toContain(
+        `Thread '${callerThreadId}' has no repository checkout.`,
+      );
+    }),
+  ).pipe(
+    Effect.provide(
+      makeCoordinationTestLayer(
+        dispatchedCommands,
+        query,
+        {} as GitWorkflowService.GitWorkflowService["Service"],
+        undefined,
+        {} as ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"],
+        gitManager,
+      ),
+    ),
+  );
+});
+
+it.effect("rejects a pull request when the target starts working before remote mutation", () => {
+  const dispatchedCommands: Array<import("@t3tools/contracts").OrchestrationCommand> = [];
+  const readyChild = thread(
+    childThreadId,
+    { kind: "agent" },
+    { sessionStatus: "ready", latestTurnState: "completed" },
+  );
+  let currentThreads: ReadonlyArray<OrchestrationThreadShell> = [caller, readyChild];
+  let remoteMutations = 0;
+  const raceQuery = {
+    ...query,
+    getShellSnapshot: () =>
+      query
+        .getShellSnapshot()
+        .pipe(Effect.map((snapshot) => ({ ...snapshot, threads: currentThreads }))),
+    getThreadShellById: (threadId: ThreadId) =>
+      Effect.succeed(
+        Option.fromNullishOr(currentThreads.find((candidate) => candidate.id === threadId)),
+      ),
+  } as unknown as ProjectionSnapshotQuery.ProjectionSnapshotQuery["Service"];
+  const gitManager = {
+    runStackedAction: (
+      _input: import("@t3tools/contracts").GitRunStackedActionInput,
+      options?: GitManager.GitRunStackedActionOptions,
+    ) =>
+      Effect.gen(function* () {
+        currentThreads = [
+          caller,
+          thread(
+            childThreadId,
+            { kind: "agent" },
+            {
+              sessionStatus: "running",
+              latestTurnState: "running",
+              activeTurnId: TurnId.make("turn-raced"),
+            },
+          ),
+        ];
+        if (options?.beforeRemoteMutation) {
+          yield* options.beforeRemoteMutation;
+        }
+        remoteMutations += 1;
+        return yield* Effect.die("remote mutation must not start after a target conflict");
+      }),
+  } as unknown as GitManager.GitManager["Service"];
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const result = yield* server
+        .callTool({
+          name: "task_create_pull_request",
+          arguments: { threadId: childThreadId },
+        })
+        .pipe(
+          Effect.provideService(
+            McpInvocationContext.McpInvocationContext,
+            invocation(new Set(["task"])),
+          ),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+
+      expect(result.isError).toBe(true);
+      expect(remoteMutations).toBe(0);
+      expect(toolErrorText(result)).toContain(
+        "changed before its pull request workflow could begin",
+      );
+    }),
+  ).pipe(
+    Effect.provide(
+      makeCoordinationTestLayer(
+        dispatchedCommands,
+        raceQuery,
         {} as GitWorkflowService.GitWorkflowService["Service"],
         undefined,
         {} as ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"],

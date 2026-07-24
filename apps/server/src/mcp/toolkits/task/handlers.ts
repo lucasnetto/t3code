@@ -83,10 +83,15 @@ export interface ActiveTaskMutationScope extends TaskToolScope {
   readonly activeTurnId: TurnId;
 }
 
-export const failTaskTool = (operation: string, detail: string) =>
+export const failTaskTool = (
+  operation: string,
+  detail: string,
+  reason?: "unavailable" | "conflict",
+) =>
   new TaskToolError({
     operation,
     detail,
+    ...(reason ? { reason } : {}),
   });
 
 const diffFail = (reason: TaskThreadDiffErrorReason, detail: string) =>

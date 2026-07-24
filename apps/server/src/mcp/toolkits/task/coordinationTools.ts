@@ -113,30 +113,9 @@ export const TaskCreatePullRequestTool = Tool.make("task_create_pull_request", {
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, false);
 
-export const TaskRevertThreadTool = Tool.make("task_revert_thread", {
-  description:
-    "Restore an idle agent-created repository thread in the current task to one of its existing checkpoint turn counts.",
-  parameters: Schema.Struct({
-    threadId: ThreadId,
-    turnCount: NonNegativeInt,
-  }),
-  success: Schema.Struct({
-    threadId: ThreadId,
-    turnCount: NonNegativeInt,
-    accepted: Schema.Boolean,
-  }),
-  failure: TaskToolError,
-  dependencies,
-})
-  .annotate(Tool.Title, "Revert task thread")
-  .annotate(Tool.Readonly, false)
-  .annotate(Tool.Destructive, true)
-  .annotate(Tool.Idempotent, false);
-
 export const TaskCoordinationToolkit = Toolkit.make(
   TaskSpawnThreadTool,
   TaskSendMessageTool,
   TaskWaitForThreadsTool,
   TaskCreatePullRequestTool,
-  TaskRevertThreadTool,
 );
