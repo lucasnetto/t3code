@@ -891,6 +891,41 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (targetThread.taskContext !== undefined) {
+        yield* requireActiveTask({
+          readModel,
+          command,
+          taskId: targetThread.taskContext.taskId,
+        });
+        if (targetThread.deletedAt !== null) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Task thread '${command.threadId}' is deleted and cannot start a turn.`,
+          });
+        }
+        if (targetThread.archivedAt !== null) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Task thread '${command.threadId}' is archived and cannot start a turn.`,
+          });
+        }
+        if (targetThread.settledOverride === "settled") {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Task thread '${command.threadId}' is settled and cannot start a turn.`,
+          });
+        }
+        if (
+          targetThread.session?.status === "starting" ||
+          targetThread.session?.status === "running" ||
+          targetThread.session?.activeTurnId != null
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Task thread '${command.threadId}' already has an active or starting turn.`,
+          });
+        }
+      }
       const sourceProposedPlan = command.sourceProposedPlan;
       const sourceThread = sourceProposedPlan
         ? yield* requireThread({

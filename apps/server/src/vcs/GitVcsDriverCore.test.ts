@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it, describe } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -820,6 +821,31 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           yield* git(cwd, ["rev-parse", "refs/heads/feature/pre-existing"]),
           originalCommit,
         );
+        const fileSystem = yield* FileSystem.FileSystem;
+        assert.equal(yield* fileSystem.exists(worktreePath), false);
+      }),
+    );
+
+    it.effect("treats a worktree base operand as a ref instead of a Git option", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const worktreePath = pathService.join(
+          yield* makeTmpDir("git-worktrees-"),
+          "option-like-base",
+        );
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        const result = yield* Effect.exit(
+          driver.createWorktree({
+            cwd,
+            path: worktreePath,
+            refName: "--detach",
+          }),
+        );
+
+        assert.isTrue(Exit.isFailure(result));
         const fileSystem = yield* FileSystem.FileSystem;
         assert.equal(yield* fileSystem.exists(worktreePath), false);
       }),
