@@ -22,10 +22,10 @@ The motivating case is one feature that needs coordinated work across several re
 6. An **agent-created thread** is an ordinary durable thread spawned by an agent through a task tool.
 7. The spawning agent supplies the agent-created thread's ordinary initial message. T3 does not assign a purpose or synthesize a prompt.
 8. Agent-created threads receive ordinary repository/provider tools but not task-scoped orchestration tools. They cannot recursively create durable T3 threads, although provider-native child agents remain available.
-9. Agent-created threads are durable and readable by users, but their thread view has no human composer, model control, checkout mutation control, or direct revert control. Emergency stop remains available.
+9. Agent-created threads are durable and readable by users, but first-party clients hide their human composer, model control, checkout mutation control, and direct revert control. This is a UI policy for trusted paired clients; emergency stop remains available.
 10. Thread creation origin is immutable. Agent-created threads are not promoted into user-created threads, and user-created threads are not reclassified as agent-created.
 11. Repository selection establishes an approved repository set for the task. It does not eagerly create worktrees.
-12. Creating a repository-bound thread creates a Git worktree beneath the task directory.
+12. Creating any repository-bound task thread creates a new T3-managed Git worktree beneath the task directory. Task creation UI does not offer the shared current checkout; ordinary standalone threads keep their existing choices.
 13. Threads retain their current ownership of conversation, provider session, project, branch, worktree path, checkpoints, diffs, filesystem revert, and source-control actions. Checkout ownership here means durable lifecycle, branch, checkpoint, and cleanup attribution; it is not a filesystem access boundary.
 14. Each repository-bound thread owns its own checkout in that lifecycle sense. T3 does not durably bind several threads to one checkout, but a trusted task coordinator or provider-native child agent may inspect or modify that checkout when its selected provider sandbox and approval mode permits it.
 15. Pull-request state continues to be discovered from the thread's current checkout and branch. The first version does not add durable PR metadata to tasks or threads.
@@ -34,7 +34,7 @@ The motivating case is one feature that needs coordinated work across several re
 18. Project setup retains today's behavior: T3 launches the setup script but does not wait for successful exit before starting the first provider turn.
 19. Changing the server worktree base directory affects only new tasks. Existing tasks retain their persisted task and worktree paths; T3 does not automatically move them. (There is no separate user-facing worktree-root setting today; the base directory derives from `T3CODE_HOME`/`--base-dir`. Introducing a dedicated setting is out of scope.)
 20. Existing non-task threads remain supported without migration into synthetic tasks.
-21. A new task remains a client draft until the first user message is sent. First send durably creates the task and first user-created thread, prepares the task directory, and only then begins provider execution.
+21. A new task remains a client draft until the first user message is sent. First send durably creates the task and first user-created thread, prepares the task directory, and only then begins provider execution. V1 uses best-effort cleanup and retry around partial bootstrap rather than a persistent saga or process-crash reconciliation protocol; a retry reuses the draft's durable IDs and observes any already-created task/thread instead of creating duplicates.
 22. Paired authenticated clients remain trusted operators, matching today's RPC model. Task filesystem checks prevent accidental or stale-path deletion; they are correctness defenses, not a new hostile-client security boundary.
 23. The server derives each new task root beneath the configured task-worktree base from the task's generated UUID, encoded as a single safe path segment. Repository-bound cwd resolution normally starts from the approved project record rather than accepting a second client-supplied repository path as an independent source of truth.
 24. Task-level cross-thread revert and task-root conversation-only revert are deferred beyond v1. Existing ordinary repository-thread checkpoint revert remains unchanged.
@@ -140,7 +140,7 @@ Repository-bound threads use one of `approvedProjectIds`. Their `worktreePath` i
 - Every thread still maps to one provider conversation/session.
 - Creation origin is immutable and determines direct human interaction policy.
 - User-created threads expose the normal composer, model controls, history, and revert behavior appropriate to their cwd.
-- Agent-created threads expose their complete history and status but no human composer, model changes, checkout mutation controls, or direct revert controls.
+- First-party clients expose an agent-created thread's complete history and status but hide its human composer, model changes, checkout mutation controls, and direct revert controls. Trusted direct RPC or manual intervention is not a v1 authorization concern.
 - Agent-created threads receive repository/provider tools but never task-scoped orchestration tools.
 - Users may stop an active agent-created thread as an emergency safety action.
 - The initial message of an agent-created thread is the ordinary message supplied by its spawning agent.
@@ -156,10 +156,10 @@ Repository-bound threads use one of `approvedProjectIds`. Their `worktreePath` i
 - Every repository-bound thread owns exactly one worktree created for it. Creation flows never durably bind a new thread to an existing thread's checkout.
 - Checkout ownership assigns lifecycle, branch, checkpoint, diff, PR-discovery, and cleanup responsibility to one durable thread; it does not restrict trusted coordinators or provider-native child agents from directly accessing the checkout.
 - Direct checkout access remains governed by the provider's selected sandbox and approval mode (`approval-required`, `auto-accept-edits`, `auto-review`, or `full-access`) rather than a task-specific filesystem firewall, lock, or lease.
-- As defense in depth, deleting one thread never removes a worktree while another live thread references the same canonical path, and task cleanup considers each distinct canonical worktree path once. These checks guard against legacy or manually produced path overlap, not a supported sharing feature.
+- As defense in depth, deleting one thread never removes a worktree while another live thread references the same normalized persisted path, and later task cleanup considers each distinct worktree path once. These checks guard against legacy or manually produced path overlap, not a supported sharing feature.
 - Setup-script launch retains existing semantics: launch failure may be recorded, but T3 does not wait for the script to exit successfully before starting the provider turn.
 - Arbitrary external worktrees cannot be adopted into task-managed cleanup in the first version.
-- Destructive task cleanup operates only on the canonical task root or its canonical descendants. A target that cannot be proven to belong to that managed root is retained and reported rather than removed.
+- V1 bootstrap cleanup uses server-derived task roots, persisted managed paths, and a lexical descendant check before removing a partially created checkout. Stronger canonical and symlink-aware destructive-cleanup validation belongs to the deferred completion/recovery phase.
 
 ## One thread per checkout
 
@@ -184,9 +184,9 @@ The server worktree base is today's `{baseDir}/worktrees` directory derived from
 
 Each directory under `worktrees/` is a real Git worktree created for and lifecycle-owned by one repository-bound thread. The database is the source of truth for task membership and managed paths; directory enumeration is not.
 
-Persist canonical resolved paths and compare checkout identity through a cross-platform normalization helper. Before removing a checkout or generated task state, canonicalize the candidate and prove that it is the task root or a descendant of that root; checkout removal requires a strict descendant beneath the task's managed `worktrees/` directory. Refuse deletion when resolution fails, containment is ambiguous, or the candidate escapes through stale metadata or a symlink. These checks protect against cleanup mistakes and legacy state; paired authenticated clients remain trusted by the RPC model. The main checkout, T3-managed task worktrees, and external worktrees remain distinct workspace kinds even if their display labels match.
+Persist normalized absolute paths and compare checkout identity through a cross-platform normalization helper. During v1 bootstrap compensation, remove only a path produced by the task workspace service and lexically contained beneath the persisted task root's `worktrees/` directory; retain and report anything that fails that check. Canonical identity, symlink-aware containment, and legacy-path hardening are deferred with the broader destructive completion/recovery machinery. These are cleanup-correctness safeguards, not a hostile-client boundary. The main checkout, T3-managed task worktrees, and external worktrees remain distinct workspace kinds even if their display labels match.
 
-The server worktree base is consulted only when creating a task. Each task persists the resulting canonical absolute `rootPath`, and its managed worktree paths remain anchored there. Cleanup validates against that persisted root rather than recomputing it from the current global configuration. Changing the base directory does not move existing task directories or rewrite thread paths. Reactivating an existing task continues using its persisted location; if that location is unavailable, T3 reports an actionable error rather than silently relocating it. Explicit task relocation is deferred.
+The server worktree base is consulted only when creating a task. Each task persists the resulting normalized absolute `rootPath`, and its managed worktree paths remain anchored there. Cleanup validates against that persisted root rather than recomputing it from the current global configuration. Changing the base directory does not move existing task directories or rewrite thread paths. Reactivating an existing task continues using its persisted location; if that location is unavailable, T3 reports an actionable error rather than silently relocating it. Explicit task relocation is deferred.
 
 `TASK.md` is generated context, not durable domain state. It may summarize the task, approved repositories, threads, branches, currently discovered PRs, creation lineage, and available orchestration tools. It should be refreshed atomically when task structure changes.
 
@@ -194,8 +194,8 @@ This layout gives every provider a normal cwd:
 
 - Task-level user-created thread: the task root through the internal task workspace project.
 - Task-level agent-created thread: the task root through the internal task workspace project.
-- Repository-bound user-created thread: its existing `worktreePath`.
-- Repository-bound agent-created thread: its existing `worktreePath`.
+- Repository-bound user-created thread: its managed `worktreePath`.
+- Repository-bound agent-created thread: its managed `worktreePath`.
 
 A task-level thread can see nested worktree directories and may explicitly `cd` into them to inspect or modify repository state. Its selected provider sandbox and approval mode govern that access exactly as they do elsewhere. Because its provider-session cwd is the non-Git task root, its own thread checkpoints do not capture nested repository changes; direct changes are instead visible through the repository-bound owning thread's checkout and may be included in that thread's later checkpoints without separate writer attribution.
 
@@ -227,7 +227,7 @@ An agent-created thread may:
 
 Agent-created threads do not receive task-orchestration capabilities and cannot recursively create durable T3 threads. They receive the ordinary repository/provider tools appropriate to their cwd and may still use provider-native child agents.
 
-Human read-only behavior is enforced at the client and server command boundary. It is not a filesystem read-only mode for the provider running the thread. Emergency stop and same-task management actions are distinct from direct conversation interaction.
+Human read-only behavior is a first-party client presentation policy: the UI hides the composer and direct mutation controls for agent-created threads. V1 does not add server authorization checks for trusted paired clients and does not make the provider's filesystem read-only. Emergency stop and same-task management actions remain visible UI exceptions.
 
 ### Provider-native child agents
 
@@ -294,7 +294,7 @@ Only user-created task threads receive the task-tool capability. Creation origin
 4. T3 snapshots the active caller session's provider instance, `modelSelection`, `runtimeMode`, and `interactionMode`, creates an ordinary agent-created thread, and uses the existing thread bootstrap to create a worktree beneath the task directory.
 5. T3 launches the project setup script using today's non-blocking behavior. A successful launch does not wait for successful script exit, and a launch failure is recorded without preventing the provider turn.
 6. T3 records the spawning thread and turn, resolves the new worktree cwd, and starts the ordinary provider turn with the inherited session configuration. If that provider session, instance, or model is unavailable, the operation returns the existing unavailable error instead of choosing defaults.
-7. Users may open and inspect the child thread but cannot use its composer or direct controls.
+7. Users may open and inspect the child thread; first-party clients hide its composer and direct controls.
 8. The spawning agent waits for status, reads the result or transcript, and decides what to do next.
 9. Existing checkpoint capture, diff, Git, and PR behavior continues to use the child thread's cwd. V1 adds no task-level revert action for that thread.
 
@@ -306,7 +306,7 @@ V1 does not add a task-level revert API or UI.
 
 Repository-bound user-created threads retain today's ordinary thread checkpoint revert unchanged. That existing behavior restores the thread's Git checkpoint and rolls back its provider conversation, but those filesystem and provider operations are not atomic.
 
-Task-root threads have a non-Git cwd, so today's checkpoint-based revert does not apply. V1 does not add a conversation-only replacement. Agent-created thread views expose no direct human revert control, and task tools cannot revert another thread.
+Task-root threads have a non-Git cwd, so today's checkpoint-based revert does not apply. V1 does not add a conversation-only replacement. First-party agent-created thread views hide direct human revert controls, and task tools cannot revert another thread.
 
 Task-level cross-thread repository revert and task-root conversation-only revert are deferred together. A robust design must define recoverable behavior when one side of a combined filesystem/conversation rollback succeeds and the other fails, including stopped provider sessions. That requires a persistent recovery operation or a deliberately weaker product contract; neither is needed for the initial multi-repository workflow. Ordinary standalone and repository-bound thread revert behavior is not redesigned as part of this work.
 
@@ -346,6 +346,7 @@ Required interactions:
 - Create a task draft, approve repositories, and send the first user-thread message.
 - Create additional user-created threads inside an active task.
 - Create a repository-bound thread with a new managed worktree.
+- Do not offer the standalone-thread "Current checkout" choice for repository-bound task threads.
 - Open any agent-created thread from its parent, repository activity, notifications, search, or deep links.
 - Inspect complete agent-thread history without exposing a human composer or direct mutation controls.
 - Stop an active agent-created thread as an emergency action.
@@ -364,7 +365,9 @@ Keep the current thread-oriented diff model.
 - Source-control and PR diffs continue using the thread cwd and current branch.
 - The task may provide a thread selector, but it does not build a synthetic multi-repository diff.
 
-## Task completion and cleanup
+## Deferred task completion and cleanup
+
+This completion and destructive-cleanup workflow belongs to Phase 5 and is not part of the v1 stack.
 
 Task completion remains a deliberate workflow rather than an extension of `thread.settled`.
 
@@ -413,7 +416,7 @@ Task membership and immutable creation origin are supplied as part of task-aware
 - Task-root thread creation uses the internal task workspace project.
 - New repository checkout creation uses the existing worktree bootstrap with a task-managed destination.
 
-Filesystem work cannot be atomic with the SQLite event transaction. Task-root preparation, managed worktree creation, cleanup, and rematerialization therefore need recoverable operation state. Today's bootstrap compensation is weaker than this: on failure it deletes the created thread but never removes an already-created worktree, so orphaned directories are possible even now. Task-managed filesystem work needs compensation that is built, not merely extended. Command receipts continue to deduplicate command decisions.
+Filesystem work cannot be atomic with the SQLite event transaction. V1 does not add persistent operation/saga state or process-crash reconciliation. Bootstrap uses best-effort interruption/failure compensation; if worktree removal fails, it preserves the truthful durable thread owner and managed path so a retry or later cleanup can see the remaining checkout. Command receipts continue to deduplicate command decisions. Persistent recovery, failure injection across process crashes, and rematerialization are deferred to Phase 5.
 
 First-turn bootstrap itself lives in the WebSocket dispatch path (`dispatchBootstrapTurnStart` in `apps/server/src/ws.ts`), not in the decider or `ProviderCommandReactor`; task-aware creation extends that path.
 
@@ -454,12 +457,12 @@ Exit criterion: tasks, approved repository membership, and multiple user-created
 - Persist each task's resolved root and apply later worktree-base changes only to new tasks.
 - Treat selected repositories as approval only; do not eagerly materialize them.
 - Extend the WebSocket bootstrap path (`dispatchBootstrapTurnStart`) to create managed worktrees beneath the task directory.
-- Canonicalize paths and preserve main-checkout, managed-task-worktree, and external-worktree distinctions.
+- Normalize persisted paths, derive repository cwd from the approved project, use lexical containment for v1 bootstrap cleanup, and preserve main-checkout, managed-task-worktree, and external-worktree distinctions.
 - Refresh a thread's stored branch metadata from its actual checkout when it is renamed or externally changed.
 - Generate and refresh `TASK.md`.
 - Make task-root and repository-bound effective cwd resolution work through existing thread fields.
 - Preserve current setup semantics: record launch failures but do not wait for successful script exit before starting the provider turn.
-- Add failure compensation and restart recovery for partial task-root and worktree preparation (today's bootstrap compensation deletes the thread but leaves created worktrees on disk).
+- Add best-effort interruption/failure compensation for partial task-root and worktree preparation. Preserve truthful durable ownership when cleanup fails so a retry or later cleanup can recover; defer persistent saga state and process-crash reconciliation to Phase 5.
 
 Exit criterion: repository-bound task threads use ordinary T3 worktrees beneath the task root, including multiple separate checkouts for the same approved repository.
 
@@ -467,6 +470,7 @@ Exit criterion: repository-bound task threads use ordinary T3 worktrees beneath 
 
 - Render tasks with multiple user-created threads and prepare nested agent-created-thread presentation for records created once Phase 4 lands; Phase 3 adds no agent-thread creation path.
 - Add task, repository approval, user-thread, and new-checkout thread creation flows.
+- For repository-bound task threads, offer only a new managed worktree; do not expose the standalone-thread "Current checkout" choice.
 - Keep agent-created threads readable and deep-linkable without a composer, model controls, checkout controls, or direct revert controls.
 - Show spawning lineage, repository, branch, current PR, and emergency stop.
 - Preserve the existing standalone project/thread UI.
@@ -492,7 +496,9 @@ Exit criterion: users can coordinate from any user-created task thread and inspe
 
 Exit criterion: agents running in any user-created task thread can coordinate durable threads without T3-defined worker purposes or prompts, and every spawned thread either starts with the caller's exact active provider configuration or fails with the existing unavailable error.
 
-### Phase 5: Completion, cleanup, and recovery
+### Deferred Phase 5: Completion, cleanup, and recovery
+
+Phase 5 is beyond the v1 stack. It is where stronger destructive-cleanup containment, persistent recovery state, process-crash reconciliation, and rematerialization belong.
 
 - Implement the active/completing/completion-blocked/completed state machine and reactivation path.
 - Add lifecycle generation fencing and task-scoped quiescence checks.
@@ -522,7 +528,7 @@ Backend coverage:
 - `task.spawn_thread` copies the active caller session's provider instance, `modelSelection`, `runtimeMode`, and `interactionMode` exactly and accepts no override for those fields.
 - Spawn fails through the existing provider/session-unavailable path when the inherited provider instance or model cannot be used; it never falls back to configured defaults.
 - User-created task threads receive task tools; agent-created threads do not and cannot recursively spawn durable T3 threads.
-- Agent-created threads reject human messages, model changes, and direct checkout/revert commands while accepting emergency stop.
+- Agent-created origin remains available in server projections so first-party clients can apply their UI policy; backend tests do not assert a new origin-based authorization boundary for trusted paired clients.
 - Agent-supplied spawn messages become ordinary initial messages without T3 prompt templates.
 - Repository approval does not create a worktree.
 - A new repository-bound thread rejects projects outside the approved set.
@@ -532,17 +538,17 @@ Backend coverage:
 - Changing the configured worktree root affects new tasks without moving or rewriting existing task paths.
 - Spawning a second thread for the same approved repository always creates a separate worktree.
 - Task-tool MCP credentials are issued only to user-created task threads; preview-only credentials cannot invoke task tools.
-- The defensive reference check still prevents worktree removal while another live thread references the same canonical path.
+- The defensive reference check still prevents worktree removal while another live thread references the same normalized persisted path.
 - Setup launch retains current non-blocking behavior: the first provider turn does not wait for successful script exit.
 - Task-root threads receive the task cwd and do not present Git checkpoints or a task-specific revert action.
 - Repository-bound threads retain existing combined conversation/filesystem revert.
 - Existing Git status, commit, push, PR creation, and PR discovery operate through the selected thread cwd.
 - No separate PR metadata is required for task projection or restart.
 - Task-scoped transcript authorization, pagination, and output caps.
-- Completion settles every task thread.
-- Local-only branches and explicitly retained dirty checkouts do not require a PR or push before completion.
-- Completion generation fencing, distinct-path cleanup or retention, blockers, partial cleanup, restart recovery, and rematerialization.
-- Cleanup refuses every target that cannot be canonically proven to be the task root or its descendant, and checkout cleanup accepts only strict descendants of the task's managed `worktrees/` directory.
+- Deferred Phase 5 coverage proves completion settles every task thread.
+- Deferred Phase 5 coverage proves local-only branches and explicitly retained dirty checkouts do not require a PR or push before completion.
+- Deferred Phase 5 coverage covers generation fencing, distinct-path cleanup or retention, blockers, partial cleanup, persistent restart recovery, and rematerialization.
+- Deferred Phase 5 coverage adds canonical and symlink-aware containment for destructive cleanup; v1 bootstrap coverage requires server-derived paths plus lexical containment beneath the persisted task root's `worktrees/` directory.
 - Provider adapter tests proving each thread receives its expected cwd and task context.
 - Coordinator access to nested checkouts follows the selected provider sandbox and approval mode; task orchestration adds no filesystem firewall, lock, or lease.
 - Provider-native child activity remains nested in its owning thread and never creates durable task entities.
@@ -552,13 +558,14 @@ Client coverage:
 
 - Multiple user-created threads render as human-interactive peers.
 - Agent-created threads nest under their creator and remain readable without a composer or direct mutation controls.
+- Repository-bound task-thread creation never offers the standalone-thread "Current checkout" choice.
 - Spawning lineage, deep linking, and emergency stop.
 - Repository approval without eager checkout creation.
 - New-checkout thread creation.
 - Task-root and agent-created thread views do not present task-specific revert actions.
 - Existing thread diff and PR presentation within a task.
 - Multiple threads for the same repository and PR.
-- Completed tasks show settled threads, retained local checkouts, blockers, and cleanup progress.
+- Deferred Phase 5 client coverage shows settled threads, retained local checkouts, blockers, and cleanup progress for completed tasks.
 
 Integrated verification:
 
@@ -579,7 +586,7 @@ Integrated verification:
 - V1 adds no task-level cross-thread or task-root conversation-only revert. Existing ordinary repository-thread checkpoint revert remains unchanged.
 - `task.create_pull_request` remains in v1 and delegates to the selected repository-bound thread's existing source-control operation.
 - Each repository-bound thread owns its checkout lifecycle, branch, checkpoints, and cleanup. Durable checkout binding is not shared, while trusted coordinators and provider-native child agents may directly access the files under their selected provider permissions.
-- Paired clients remain trusted operators. Server-derived task roots, project-derived repository cwd, and canonical cleanup containment are correctness safeguards rather than a hostile-client capability system.
+- Paired clients remain trusted operators. Server-derived task roots, project-derived repository cwd, and lexical v1 bootstrap-cleanup containment are correctness safeguards rather than a hostile-client capability system; stronger canonical destructive cleanup is deferred to Phase 5.
 - `task.spawn_thread` inherits the spawning user thread's active provider instance, `modelSelection`, `runtimeMode`, and `interactionMode`. V1 has no cross-provider, model, runtime, or interaction override, and unavailable inherited configuration fails instead of falling back.
 
 ## Explicit non-goals for the first version
@@ -591,7 +598,7 @@ Integrated verification:
 - T3-authored worker or review prompt templates.
 - Promoting agent-created threads into user-created threads or reclassifying user-created threads.
 - Recursive durable T3-thread delegation from an agent-created thread.
-- Human messaging, model changes, or direct checkout/revert controls inside an agent-created thread view.
+- Human messaging, model changes, or direct checkout/revert controls inside an agent-created thread view in first-party clients. V1 does not enforce this as a server authorization boundary for trusted paired clients.
 - Task-level cross-thread repository revert or task-root conversation-only revert. These are deferred until a recoverable partial-failure contract is designed.
 - Eagerly creating a worktree for every approved repository.
 - Durable checkout binding between threads, including spawn-time checkout reuse and any shared-lifecycle attribution, warning, or revert semantics. This does not prohibit trusted coordinator access to nested checkouts.
@@ -601,6 +608,7 @@ Integrated verification:
 - A new user-facing worktree-root setting.
 - One task-wide revert across multiple conversations and repositories.
 - Enforcing filesystem read-only behavior based on thread creation origin.
+- Persistent bootstrap saga state or process-crash reconciliation before deferred Phase 5.
 - Treating provider-native subagents as durable T3 task threads automatically.
 - Adopting arbitrary external worktrees into T3-managed task cleanup.
 - Treating client-local sidebar folders, worktree labels, or path-derived groups as durable task membership.
