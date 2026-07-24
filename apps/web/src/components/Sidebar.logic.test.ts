@@ -8,6 +8,7 @@ import {
   createThreadJumpHintVisibilityController,
   getSidebarThreadIdsToPrewarm,
   getVisibleSidebarThreadIds,
+  groupAgentThreadsForSidebarV2,
   resolveAdjacentThreadId,
   getFallbackThreadIdAfterDelete,
   getVisibleThreadsForProject,
@@ -786,6 +787,77 @@ describe("sortThreadsForSidebarV2", () => {
     ]);
 
     expect(sorted.map((thread) => thread.id)).toEqual(["a", "b"]);
+  });
+});
+
+describe("groupAgentThreadsForSidebarV2", () => {
+  const taskThread = (input: {
+    id: string;
+    taskId?: string;
+    parentThreadId?: string;
+    environmentId?: string;
+  }) => ({
+    id: input.id,
+    environmentId: input.environmentId ?? "environment-local",
+    taskContext:
+      input.taskId === undefined
+        ? undefined
+        : {
+            taskId: input.taskId,
+            createdBy:
+              input.parentThreadId === undefined
+                ? ({ kind: "user" } as const)
+                : ({ kind: "agent", threadId: input.parentThreadId } as const),
+          },
+  });
+
+  it("places agent children directly after their creator while preserving sibling order", () => {
+    const grouped = groupAgentThreadsForSidebarV2([
+      taskThread({ id: "new-root", taskId: "task-1" }),
+      taskThread({ id: "new-child", taskId: "task-1", parentThreadId: "old-root" }),
+      taskThread({ id: "middle-child", taskId: "task-1", parentThreadId: "old-root" }),
+      taskThread({ id: "old-root", taskId: "task-1" }),
+      taskThread({ id: "standalone" }),
+    ]);
+
+    expect(grouped.map((thread) => thread.id)).toEqual([
+      "new-root",
+      "old-root",
+      "new-child",
+      "middle-child",
+      "standalone",
+    ]);
+  });
+
+  it("does not group a child with a same-id thread from another task or environment", () => {
+    const grouped = groupAgentThreadsForSidebarV2([
+      taskThread({
+        id: "child",
+        taskId: "task-1",
+        parentThreadId: "coordinator",
+      }),
+      taskThread({ id: "coordinator", taskId: "task-2" }),
+      taskThread({
+        id: "coordinator",
+        taskId: "task-1",
+        environmentId: "environment-remote",
+      }),
+    ]);
+
+    expect(grouped.map((thread) => `${thread.environmentId}:${thread.id}`)).toEqual([
+      "environment-local:child",
+      "environment-local:coordinator",
+      "environment-remote:coordinator",
+    ]);
+  });
+
+  it("keeps a child in its existing position when its creator is filtered out", () => {
+    const grouped = groupAgentThreadsForSidebarV2([
+      taskThread({ id: "child", taskId: "task-1", parentThreadId: "filtered-parent" }),
+      taskThread({ id: "peer", taskId: "task-1" }),
+    ]);
+
+    expect(grouped.map((thread) => thread.id)).toEqual(["child", "peer"]);
   });
 });
 

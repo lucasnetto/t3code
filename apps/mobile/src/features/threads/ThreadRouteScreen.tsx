@@ -71,6 +71,7 @@ import {
   ThreadInspectorContentStack,
   type ThreadInspectorMode,
 } from "./thread-inspector-content-stack";
+import { isMobileThreadUiActionAllowed, resolveMobileThreadUiPolicy } from "./threadUiPolicy";
 
 interface ThreadInspectorSelection {
   readonly routeThreadIdentity: string | null;
@@ -190,6 +191,8 @@ function ThreadRouteContent(
     useThreadSelection();
   const selectedThreadDetailState = props.selectedThreadDetailState;
   const selectedThreadDetail = Option.getOrNull(selectedThreadDetailState.data);
+  const threadUiPolicy = resolveMobileThreadUiPolicy(selectedThread);
+  const threadUiReadOnly = threadUiPolicy.readOnly;
   const { selectedThreadCwd } = useSelectedThreadWorktree();
   const composer = useThreadComposerState();
   const gitState = useSelectedThreadGitState();
@@ -267,7 +270,7 @@ function ThreadRouteContent(
   const routeConnectionError = routeEnvironmentRuntime?.connectionError ?? null;
   const selectedThreadWithDraftSettings = useMemo(
     () =>
-      selectedThread
+      selectedThread && !threadUiReadOnly
         ? {
             ...selectedThread,
             modelSelection: composer.modelSelection ?? selectedThread.modelSelection,
@@ -275,7 +278,13 @@ function ThreadRouteContent(
             interactionMode: composer.interactionMode ?? selectedThread.interactionMode,
           }
         : null,
-    [composer.interactionMode, composer.modelSelection, composer.runtimeMode, selectedThread],
+    [
+      composer.interactionMode,
+      composer.modelSelection,
+      composer.runtimeMode,
+      selectedThread,
+      threadUiReadOnly,
+    ],
   );
 
   /* ─── Native header theming ──────────────────────────────────────── */
@@ -326,6 +335,9 @@ function ThreadRouteContent(
   const gitActionProgress = useGitActionProgress(gitActionProgressTarget);
 
   const handleOpenGitInspector = useCallback(() => {
+    if (!isMobileThreadUiActionAllowed(threadUiPolicy, "mutate-git")) {
+      return;
+    }
     if (!fileInspector.supported) {
       if (selectedThread === null) {
         return;
@@ -338,7 +350,14 @@ function ThreadRouteContent(
     }
     setInspectorSelection({ routeThreadIdentity, mode: "git" });
     showAuxiliaryPane("inspector");
-  }, [fileInspector.supported, navigation, routeThreadIdentity, selectedThread, showAuxiliaryPane]);
+  }, [
+    fileInspector.supported,
+    navigation,
+    routeThreadIdentity,
+    selectedThread,
+    showAuxiliaryPane,
+    threadUiPolicy,
+  ]);
   const handleOpenFilesInspector = useCallback(() => {
     if (selectedThread === null || selectedThreadCwd === null) {
       return;
@@ -458,8 +477,11 @@ function ThreadRouteContent(
   useRegisterWorkspaceInspector(activeInspectorRenderer);
 
   const handleOpenConnectionEditor = useCallback(() => {
+    if (!isMobileThreadUiActionAllowed(threadUiPolicy, "change-environment")) {
+      return;
+    }
     void navigation.navigate("Connections");
-  }, [navigation]);
+  }, [navigation, threadUiPolicy]);
   const handleStopThread = useCallback(() => {
     if (
       !selectedThread ||
@@ -481,6 +503,9 @@ function ThreadRouteContent(
 
   const handleOpenTerminal = useCallback(
     (nextTerminalId?: string | null) => {
+      if (!isMobileThreadUiActionAllowed(threadUiPolicy, "open-terminal")) {
+        return;
+      }
       terminalDebugLog("terminal-menu:open-existing", {
         terminalId: nextTerminalId ?? null,
         hasThread: Boolean(selectedThread),
@@ -497,10 +522,13 @@ function ThreadRouteContent(
         ...(nextTerminalId ? { terminalId: nextTerminalId } : {}),
       });
     },
-    [navigation, selectedThread, selectedThreadProject?.workspaceRoot],
+    [navigation, selectedThread, selectedThreadProject?.workspaceRoot, threadUiPolicy],
   );
 
   const handleOpenNewTerminal = useCallback(() => {
+    if (!isMobileThreadUiActionAllowed(threadUiPolicy, "open-terminal")) {
+      return;
+    }
     terminalDebugLog("terminal-menu:open-new", {
       hasThread: Boolean(selectedThread),
       hasWorkspaceRoot: Boolean(selectedThreadProject?.workspaceRoot),
@@ -519,10 +547,19 @@ function ThreadRouteContent(
       threadId: String(selectedThread.id),
       terminalId: nextId,
     });
-  }, [navigation, selectedThread, selectedThreadProject?.workspaceRoot, terminalMenuSessions]);
+  }, [
+    navigation,
+    selectedThread,
+    selectedThreadProject?.workspaceRoot,
+    terminalMenuSessions,
+    threadUiPolicy,
+  ]);
 
   const handleRunProjectScript = useCallback(
     async (script: ProjectScript) => {
+      if (!isMobileThreadUiActionAllowed(threadUiPolicy, "run-project-script")) {
+        return;
+      }
       terminalDebugLog("project-script:press", {
         scriptId: script.id,
         command: script.command,
@@ -588,9 +625,26 @@ function ThreadRouteContent(
       selectedThreadDetailWorktreePath,
       selectedThreadProject,
       terminalMenuSessions,
+      threadUiPolicy,
     ],
   );
+  const handlePull = useCallback(async () => {
+    if (!isMobileThreadUiActionAllowed(threadUiPolicy, "mutate-git")) {
+      return;
+    }
+    await gitActions.onPullSelectedThreadBranch();
+  }, [gitActions.onPullSelectedThreadBranch, threadUiPolicy]);
+  const handleRunGitAction = useCallback(
+    async (input: Parameters<typeof gitActions.onRunSelectedThreadGitAction>[0]) => {
+      if (!isMobileThreadUiActionAllowed(threadUiPolicy, "mutate-git")) {
+        return null;
+      }
+      return gitActions.onRunSelectedThreadGitAction(input);
+    },
+    [gitActions.onRunSelectedThreadGitAction, threadUiPolicy],
+  );
   const threadGitControlProps = {
+    readOnly: threadUiReadOnly,
     environmentId: environmentIdRaw ?? "",
     threadId: threadId ?? "",
     auxiliaryPaneControl:
@@ -614,8 +668,8 @@ function ThreadRouteContent(
     onOpenTerminal: handleOpenTerminal,
     onOpenNewTerminal: handleOpenNewTerminal,
     onRunProjectScript: handleRunProjectScript,
-    onPull: gitActions.onPullSelectedThreadBranch,
-    onRunAction: gitActions.onRunSelectedThreadGitAction,
+    onPull: handlePull,
+    onRunAction: handleRunGitAction,
   };
   const threadCenterHeaderItems = useThreadGitCenterHeaderItems(threadGitControlProps);
   const compactRightHeaderItems = useThreadGitRightHeaderItems(threadGitControlProps);
@@ -678,18 +732,20 @@ function ThreadRouteContent(
         onPress: handleOpenFilesInspector,
       });
     }
-    if (selectedThreadProject?.workspaceRoot) {
+    if (selectedThreadProject?.workspaceRoot && !threadUiReadOnly) {
       actions.push({
         accessibilityLabel: "Open terminal",
         icon: "terminal",
         onPress: () => handleOpenTerminal(null),
       });
     }
-    actions.push({
-      accessibilityLabel: "Open git controls",
-      icon: "point.topleft.down.curvedto.point.bottomright.up",
-      onPress: handleOpenGitInspector,
-    });
+    if (!threadUiReadOnly) {
+      actions.push({
+        accessibilityLabel: "Open git controls",
+        icon: "point.topleft.down.curvedto.point.bottomright.up",
+        onPress: handleOpenGitInspector,
+      });
+    }
     if (fileInspector.supported && selectedThreadCwd !== null) {
       actions.push({
         accessibilityLabel: "Toggle inspector",
@@ -707,6 +763,7 @@ function ThreadRouteContent(
     props.onReturnToThread,
     selectedThreadCwd,
     selectedThreadProject?.workspaceRoot,
+    threadUiReadOnly,
   ]);
 
   // Deep links / cold starts land with Thread as the ONLY route, where the
@@ -741,6 +798,72 @@ function ThreadRouteContent(
     connectionState: routeConnectionState,
   });
   const serverConfig = routeEnvironmentRuntime?.serverConfig ?? null;
+  const handleSendMessage = useCallback(() => {
+    if (!isMobileThreadUiActionAllowed(threadUiPolicy, "send-message")) {
+      return Promise.resolve(null);
+    }
+    return composer.onSendMessage();
+  }, [composer.onSendMessage, threadUiPolicy]);
+  const handleUpdateModelSelection = useCallback(
+    (selection: Parameters<typeof composer.onUpdateModelSelection>[0]) => {
+      if (!isMobileThreadUiActionAllowed(threadUiPolicy, "change-model")) {
+        return;
+      }
+      composer.onUpdateModelSelection(selection);
+    },
+    [composer.onUpdateModelSelection, threadUiPolicy],
+  );
+  const handleUpdateRuntimeMode = useCallback(
+    (runtimeMode: Parameters<typeof composer.onUpdateRuntimeMode>[0]) => {
+      if (!isMobileThreadUiActionAllowed(threadUiPolicy, "change-runtime")) {
+        return;
+      }
+      composer.onUpdateRuntimeMode(runtimeMode);
+    },
+    [composer.onUpdateRuntimeMode, threadUiPolicy],
+  );
+  const handleUpdateInteractionMode = useCallback(
+    (interactionMode: Parameters<typeof composer.onUpdateInteractionMode>[0]) => {
+      if (!isMobileThreadUiActionAllowed(threadUiPolicy, "change-runtime")) {
+        return;
+      }
+      composer.onUpdateInteractionMode(interactionMode);
+    },
+    [composer.onUpdateInteractionMode, threadUiPolicy],
+  );
+  const handleRespondToApproval = useCallback(
+    (...args: Parameters<typeof requests.onRespondToApproval>) => {
+      if (!isMobileThreadUiActionAllowed(threadUiPolicy, "respond-to-request")) {
+        return Promise.resolve(null);
+      }
+      return requests.onRespondToApproval(...args);
+    },
+    [requests.onRespondToApproval, threadUiPolicy],
+  );
+  const handleSelectUserInputOption = useCallback(
+    (...args: Parameters<typeof requests.onSelectUserInputOption>) => {
+      if (!isMobileThreadUiActionAllowed(threadUiPolicy, "respond-to-request")) {
+        return;
+      }
+      requests.onSelectUserInputOption(...args);
+    },
+    [requests.onSelectUserInputOption, threadUiPolicy],
+  );
+  const handleChangeUserInputCustomAnswer = useCallback(
+    (...args: Parameters<typeof requests.onChangeUserInputCustomAnswer>) => {
+      if (!isMobileThreadUiActionAllowed(threadUiPolicy, "respond-to-request")) {
+        return;
+      }
+      requests.onChangeUserInputCustomAnswer(...args);
+    },
+    [requests.onChangeUserInputCustomAnswer, threadUiPolicy],
+  );
+  const handleSubmitUserInput = useCallback(() => {
+    if (!isMobileThreadUiActionAllowed(threadUiPolicy, "respond-to-request")) {
+      return Promise.resolve(null);
+    }
+    return requests.onSubmitUserInput();
+  }, [requests.onSubmitUserInput, threadUiPolicy]);
   const renderThreadRouteBody = (showActionControls: boolean) => (
     <>
       <ThreadGitControls {...threadGitControlProps} showActionControls={showActionControls} />
@@ -750,6 +873,7 @@ function ThreadRouteContent(
       <View className="flex-1 bg-screen">
         <ThreadDetailScreen
           selectedThread={selectedThreadWithDraftSettings ?? selectedThread}
+          readOnly={threadUiReadOnly}
           contentPresentation={contentPresentation}
           screenTone={connectionTone(routeConnectionState)}
           connectionError={routeConnectionError}
@@ -780,15 +904,15 @@ function ThreadRouteContent(
           onRemoveDraftImage={composer.onRemoveDraftImage}
           serverConfig={serverConfig}
           onStopThread={handleStopThread}
-          onSendMessage={composer.onSendMessage}
+          onSendMessage={handleSendMessage}
           onReconnectEnvironment={handleReconnectEnvironment}
-          onUpdateThreadModelSelection={composer.onUpdateModelSelection}
-          onUpdateThreadRuntimeMode={composer.onUpdateRuntimeMode}
-          onUpdateThreadInteractionMode={composer.onUpdateInteractionMode}
-          onRespondToApproval={requests.onRespondToApproval}
-          onSelectUserInputOption={requests.onSelectUserInputOption}
-          onChangeUserInputCustomAnswer={requests.onChangeUserInputCustomAnswer}
-          onSubmitUserInput={requests.onSubmitUserInput}
+          onUpdateThreadModelSelection={handleUpdateModelSelection}
+          onUpdateThreadRuntimeMode={handleUpdateRuntimeMode}
+          onUpdateThreadInteractionMode={handleUpdateInteractionMode}
+          onRespondToApproval={handleRespondToApproval}
+          onSelectUserInputOption={handleSelectUserInputOption}
+          onChangeUserInputCustomAnswer={handleChangeUserInputCustomAnswer}
+          onSubmitUserInput={handleSubmitUserInput}
         />
       </View>
     </>

@@ -559,6 +559,75 @@ export function sortThreadsForSidebarV2<
   );
 }
 
+type SidebarV2TaskThread = {
+  readonly id: string;
+  readonly environmentId: string;
+  readonly taskContext?:
+    | {
+        readonly taskId: string;
+        readonly createdBy:
+          | { readonly kind: "user" }
+          | {
+              readonly kind: "agent";
+              readonly threadId: string;
+            };
+      }
+    | undefined;
+};
+
+/**
+ * Turns an already-sorted sidebar partition into creator groups without
+ * changing the relative order of roots or siblings. Agent threads whose
+ * creator is outside the current filter/partition remain ordinary roots.
+ */
+export function groupAgentThreadsForSidebarV2<T extends SidebarV2TaskThread>(
+  threads: readonly T[],
+): T[] {
+  const keyFor = (thread: T): string =>
+    `${thread.environmentId}\u0000${thread.taskContext?.taskId ?? ""}\u0000${thread.id}`;
+  const byKey = new Map(threads.map((thread) => [keyFor(thread), thread] as const));
+  const parentKeyByChildKey = new Map<string, string>();
+  const childrenByParentKey = new Map<string, T[]>();
+
+  for (const thread of threads) {
+    const taskContext = thread.taskContext;
+    if (taskContext?.createdBy.kind !== "agent") continue;
+    const parentKey = `${thread.environmentId}\u0000${taskContext.taskId}\u0000${taskContext.createdBy.threadId}`;
+    if (!byKey.has(parentKey)) continue;
+    parentKeyByChildKey.set(keyFor(thread), parentKey);
+    const siblings = childrenByParentKey.get(parentKey);
+    if (siblings) {
+      siblings.push(thread);
+    } else {
+      childrenByParentKey.set(parentKey, [thread]);
+    }
+  }
+
+  const grouped: T[] = [];
+  const visited = new Set<string>();
+  const appendGroup = (thread: T): void => {
+    const key = keyFor(thread);
+    if (visited.has(key)) return;
+    visited.add(key);
+    grouped.push(thread);
+    for (const child of childrenByParentKey.get(key) ?? []) {
+      appendGroup(child);
+    }
+  };
+
+  for (const thread of threads) {
+    if (!parentKeyByChildKey.has(keyFor(thread))) {
+      appendGroup(thread);
+    }
+  }
+  // Defensive fallback for malformed cyclic lineage: keep every row visible.
+  for (const thread of threads) {
+    appendGroup(thread);
+  }
+
+  return grouped;
+}
+
 export function resolveThreadStatusPill(input: {
   thread: ThreadStatusInput;
 }): ThreadStatusPill | null {
