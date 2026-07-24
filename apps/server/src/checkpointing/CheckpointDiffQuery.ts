@@ -23,6 +23,7 @@ import * as Schema from "effect/Schema";
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
+  type CheckpointDiffOperation,
   CheckpointDiffResultInvalidError,
   CheckpointRefUnavailableError,
   CheckpointThreadNotFoundError,
@@ -30,7 +31,7 @@ import {
   CheckpointWorkspacePathMissingError,
   CheckpointWorkspaceUnavailableError,
 } from "./Errors.ts";
-import type { CheckpointServiceError } from "./Errors.ts";
+import type { CheckpointServiceError, CheckpointStoreError } from "./Errors.ts";
 import { checkpointRefForThreadTurn } from "./Utils.ts";
 import * as CheckpointStore from "./CheckpointStore.ts";
 
@@ -79,6 +80,33 @@ function buildTurnDiffResult(
 export const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const checkpointStore = yield* CheckpointStore.CheckpointStore;
+
+  const requireAvailableWorkspace = Effect.fn("CheckpointDiffQuery.requireAvailableWorkspace")(
+    function* (input: {
+      readonly operation: CheckpointDiffOperation;
+      readonly threadId: ThreadId;
+      readonly workspaceCwd: string | null;
+    }): Effect.fn.Return<
+      string,
+      | CheckpointStoreError
+      | CheckpointWorkspacePathMissingError
+      | CheckpointWorkspaceUnavailableError
+    > {
+      if (!input.workspaceCwd) {
+        return yield* new CheckpointWorkspacePathMissingError({
+          operation: input.operation,
+          threadId: input.threadId,
+        });
+      }
+      if (!(yield* checkpointStore.isGitRepository(input.workspaceCwd))) {
+        return yield* new CheckpointWorkspaceUnavailableError({
+          operation: input.operation,
+          threadId: input.threadId,
+        });
+      }
+      return input.workspaceCwd;
+    },
+  );
 
   const getTurnDiff: CheckpointDiffQuery["Service"]["getTurnDiff"] = Effect.fn("getTurnDiff")(
     function* (input) {
@@ -130,19 +158,11 @@ export const make = Effect.gen(function* () {
         });
       }
 
-      const workspaceCwd = threadContext.value.worktreePath ?? threadContext.value.workspaceRoot;
-      if (!workspaceCwd) {
-        return yield* new CheckpointWorkspacePathMissingError({
-          operation,
-          threadId: input.threadId,
-        });
-      }
-      if (!(yield* checkpointStore.isGitRepository(workspaceCwd))) {
-        return yield* new CheckpointWorkspaceUnavailableError({
-          operation,
-          threadId: input.threadId,
-        });
-      }
+      const workspaceCwd = yield* requireAvailableWorkspace({
+        operation,
+        threadId: input.threadId,
+        workspaceCwd: threadContext.value.worktreePath ?? threadContext.value.workspaceRoot,
+      });
 
       const fromCheckpointRef =
         input.fromTurnCount === 0
@@ -244,19 +264,11 @@ export const make = Effect.gen(function* () {
       });
     }
 
-    const workspaceCwd = threadContext.value.worktreePath ?? threadContext.value.workspaceRoot;
-    if (!workspaceCwd) {
-      return yield* new CheckpointWorkspacePathMissingError({
-        operation,
-        threadId: input.threadId,
-      });
-    }
-    if (!(yield* checkpointStore.isGitRepository(workspaceCwd))) {
-      return yield* new CheckpointWorkspaceUnavailableError({
-        operation,
-        threadId: input.threadId,
-      });
-    }
+    const workspaceCwd = yield* requireAvailableWorkspace({
+      operation,
+      threadId: input.threadId,
+      workspaceCwd: threadContext.value.worktreePath ?? threadContext.value.workspaceRoot,
+    });
 
     if (!threadContext.value.toCheckpointRef) {
       return yield* new CheckpointRefUnavailableError({
