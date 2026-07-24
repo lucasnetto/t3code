@@ -16,6 +16,7 @@ import {
   NonNegativeInt,
   ProjectId,
   ProviderItemId,
+  TaskId,
   ThreadId,
   TrimmedNonEmptyString,
   TurnId,
@@ -209,6 +210,9 @@ export const ProjectScript = Schema.Struct({
 });
 export type ProjectScript = typeof ProjectScript.Type;
 
+export const OrchestrationProjectVisibility = Schema.Literals(["visible", "internal-task"]);
+export type OrchestrationProjectVisibility = typeof OrchestrationProjectVisibility.Type;
+
 export const OrchestrationProject = Schema.Struct({
   id: ProjectId,
   title: TrimmedNonEmptyString,
@@ -219,8 +223,68 @@ export const OrchestrationProject = Schema.Struct({
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),
+  visibility: Schema.optionalKey(OrchestrationProjectVisibility),
 });
 export type OrchestrationProject = typeof OrchestrationProject.Type;
+
+export const OrchestrationTaskStatus = Schema.Literals([
+  "active",
+  "completing",
+  "completion-blocked",
+  "completed",
+]);
+export type OrchestrationTaskStatus = typeof OrchestrationTaskStatus.Type;
+
+export const OrchestrationTask = Schema.Struct({
+  id: TaskId,
+  title: TrimmedNonEmptyString,
+  status: OrchestrationTaskStatus,
+  rootPath: TrimmedNonEmptyString,
+  workspaceProjectId: ProjectId,
+  approvedProjectIds: Schema.Array(ProjectId).check(Schema.isUnique()),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+  completedAt: Schema.NullOr(IsoDateTime),
+}).check(
+  Schema.makeFilter(
+    (task) =>
+      (task.status === "completed") === (task.completedAt !== null) || {
+        path: ["completedAt"],
+        issue:
+          task.status === "completed"
+            ? "completedAt must be set when task status is completed"
+            : "completedAt must be null unless task status is completed",
+      },
+    { identifier: "OrchestrationTaskCompletionState" },
+  ),
+  Schema.makeFilter(
+    (task) =>
+      !task.approvedProjectIds.includes(task.workspaceProjectId) || {
+        path: ["approvedProjectIds"],
+        issue: "approvedProjectIds must not include workspaceProjectId",
+      },
+    { identifier: "OrchestrationTaskApprovedProjects" },
+  ),
+);
+export type OrchestrationTask = typeof OrchestrationTask.Type;
+
+export const ThreadCreatedBy = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("user"),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("agent"),
+    threadId: ThreadId,
+    turnId: TurnId,
+  }),
+]);
+export type ThreadCreatedBy = typeof ThreadCreatedBy.Type;
+
+export const ThreadTaskContext = Schema.Struct({
+  taskId: TaskId,
+  createdBy: ThreadCreatedBy,
+});
+export type ThreadTaskContext = typeof ThreadTaskContext.Type;
 
 export const OrchestrationMessageRole = Schema.Literals(["user", "assistant", "system"]);
 export type OrchestrationMessageRole = typeof OrchestrationMessageRole.Type;
@@ -369,6 +433,7 @@ export const OrchestrationThread = Schema.Struct({
   activities: Schema.Array(OrchestrationThreadActivity),
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
   session: Schema.NullOr(OrchestrationSession),
+  taskContext: Schema.optionalKey(ThreadTaskContext),
 });
 export type OrchestrationThread = typeof OrchestrationThread.Type;
 
@@ -389,6 +454,7 @@ export const OrchestrationProjectShell = Schema.Struct({
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
+  visibility: Schema.optionalKey(OrchestrationProjectVisibility),
 });
 export type OrchestrationProjectShell = typeof OrchestrationProjectShell.Type;
 
@@ -416,6 +482,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   hasPendingApprovals: Schema.Boolean,
   hasPendingUserInput: Schema.Boolean,
   hasActionableProposedPlan: Schema.Boolean,
+  taskContext: Schema.optionalKey(ThreadTaskContext),
 });
 export type OrchestrationThreadShell = typeof OrchestrationThreadShell.Type;
 
