@@ -789,26 +789,31 @@ export default function SidebarV2() {
   // merging, no optimistic holds. Archived threads remain hidden here —
   // archive keeps its original "remove from sidebar" meaning.
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
-  const taskEnvironmentId = useMemo(() => {
-    if (
-      primaryEnvironmentId &&
-      serverConfigs.get(primaryEnvironmentId)?.environment.capabilities.taskThreads === true
-    ) {
-      return primaryEnvironmentId;
-    }
-    return (
-      projects.find(
-        (project) =>
-          serverConfigs.get(project.environmentId)?.environment.capabilities.taskThreads === true,
-      )?.environmentId ?? null
-    );
-  }, [primaryEnvironmentId, projects, serverConfigs]);
+  const taskEnvironments = useMemo(
+    () =>
+      environments
+        .filter(
+          (environment) =>
+            serverConfigs.get(environment.environmentId)?.environment.capabilities.taskThreads ===
+            true,
+        )
+        .map((environment) => ({
+          environmentId: environment.environmentId,
+          label: environment.label,
+        })),
+    [environments, serverConfigs],
+  );
+  const taskEnvironmentIds = useMemo(
+    () => new Set(taskEnvironments.map((environment) => environment.environmentId)),
+    [taskEnvironments],
+  );
   const taskDraftProjects = useMemo(
     () =>
-      taskEnvironmentId === null
-        ? []
-        : projects.filter((project) => project.environmentId === taskEnvironmentId),
-    [projects, taskEnvironmentId],
+      projects.filter(
+        (project) =>
+          taskEnvironmentIds.has(project.environmentId) && project.repositoryIdentity != null,
+      ),
+    [projects, taskEnvironmentIds],
   );
   const { activeThreads, settledThreads } = useMemo(() => {
     const now = `${nowMinute}:00.000Z`;
@@ -1450,7 +1455,7 @@ export default function SidebarV2() {
                 size="sm"
                 className="size-7 justify-center border border-border bg-background/60 p-0 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
                 onClick={() => setTaskCreateOpen(true)}
-                disabled={taskDraftProjects.length === 0}
+                disabled={taskEnvironments.length === 0}
                 aria-label="New task"
                 tooltip={{ children: "New task", side: "right" }}
               >
@@ -1690,6 +1695,8 @@ export default function SidebarV2() {
       <TaskCreateDialog
         open={taskCreateOpen}
         onOpenChange={setTaskCreateOpen}
+        environments={taskEnvironments}
+        primaryEnvironmentId={primaryEnvironmentId}
         projects={taskDraftProjects}
         onCreate={createTaskDraft}
       />

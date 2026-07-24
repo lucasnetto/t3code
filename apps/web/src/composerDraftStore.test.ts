@@ -66,6 +66,7 @@ import {
   markPromotedDraftThreadByRef,
   markPromotedDraftThreads,
   markPromotedDraftThreadsByRef,
+  reconcileTaskDraftRepositories,
   type ComposerImageAttachment,
   useComposerDraftStore,
   DraftId,
@@ -788,6 +789,105 @@ describe("composerDraftStore project draft thread mapping", () => {
       title: "Ship payments",
       workspaceProjectId,
       approvedProjectIds: [projectId, otherProjectId],
+    });
+  });
+
+  it("removes unavailable task approvals and moves a stale anchor to the first survivor", () => {
+    const taskId = TaskId.make("task-draft");
+    const workspaceProjectId = ProjectId.make("project-task-draft");
+    const thirdProjectId = ProjectId.make("project-third");
+    const recovery = reconcileTaskDraftRepositories({
+      taskDraft: {
+        taskId,
+        title: "Ship payments",
+        workspaceProjectId,
+        approvedProjectIds: [projectId, otherProjectId, thirdProjectId],
+      },
+      anchorProjectId: projectId,
+      availableProjectIds: [otherProjectId, thirdProjectId],
+    });
+
+    expect(recovery).toEqual({
+      taskDraft: {
+        taskId,
+        title: "Ship payments",
+        workspaceProjectId,
+        approvedProjectIds: [otherProjectId, thirdProjectId],
+      },
+      anchorProjectId: otherProjectId,
+      changed: true,
+    });
+  });
+
+  it("preserves task identity, content, and valid approvals while applying recovery", () => {
+    const store = useComposerDraftStore.getState();
+    const taskId = TaskId.make("task-draft");
+    const workspaceProjectId = ProjectId.make("project-task-draft");
+    store.setLogicalProjectDraftThreadId("task-draft:task-draft", projectRef, draftId, {
+      threadId,
+      taskDraft: {
+        taskId,
+        title: "Ship payments",
+        workspaceProjectId,
+        approvedProjectIds: [projectId, otherProjectId],
+      },
+    });
+    store.setPrompt(draftId, "Keep this prompt");
+
+    const current = useComposerDraftStore.getState().getDraftSession(draftId);
+    expect(current?.taskDraft).toBeDefined();
+    if (!current?.taskDraft) {
+      throw new Error("Expected task draft");
+    }
+    const recovery = reconcileTaskDraftRepositories({
+      taskDraft: current.taskDraft,
+      anchorProjectId: current.projectId,
+      availableProjectIds: [otherProjectId],
+    });
+    store.setDraftThreadContext(draftId, {
+      projectRef: scopeProjectRef(TEST_ENVIRONMENT_ID, recovery.anchorProjectId!),
+      taskDraft: recovery.taskDraft,
+    });
+
+    expect(useComposerDraftStore.getState().getDraftSession(draftId)).toMatchObject({
+      threadId,
+      taskDraft: {
+        taskId,
+        title: "Ship payments",
+        workspaceProjectId,
+        approvedProjectIds: [otherProjectId],
+      },
+    });
+    expect(useComposerDraftStore.getState().getComposerDraft(draftId)?.prompt).toBe(
+      "Keep this prompt",
+    );
+  });
+
+  it("reports an actionable empty approval set without substituting a new repository", () => {
+    const taskId = TaskId.make("task-draft");
+    const workspaceProjectId = ProjectId.make("project-task-draft");
+    const newlyVisibleProjectId = ProjectId.make("project-new");
+
+    expect(
+      reconcileTaskDraftRepositories({
+        taskDraft: {
+          taskId,
+          title: "Ship payments",
+          workspaceProjectId,
+          approvedProjectIds: [projectId],
+        },
+        anchorProjectId: projectId,
+        availableProjectIds: [newlyVisibleProjectId],
+      }),
+    ).toEqual({
+      taskDraft: {
+        taskId,
+        title: "Ship payments",
+        workspaceProjectId,
+        approvedProjectIds: [],
+      },
+      anchorProjectId: null,
+      changed: true,
     });
   });
 

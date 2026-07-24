@@ -4,6 +4,7 @@ import {
   ProjectId,
   type ModelSelection,
   type ProviderDriverKind,
+  type ScopedProjectRef,
   type ServerProvider,
   type ScopedThreadRef,
   type ThreadId,
@@ -40,6 +41,67 @@ const AGENT_THREAD_BLOCKED_EXACT_COMMANDS = new Set([
 
 export function isAgentThreadUiMutationCommand(command: string): boolean {
   return AGENT_THREAD_BLOCKED_EXACT_COMMANDS.has(command) || command.startsWith("script.");
+}
+
+export interface RepositoryUiContext {
+  readonly projectRef: ScopedProjectRef | null;
+  readonly projectCwd: string | null;
+  readonly worktreePath: string | null;
+  readonly rightPanelOpen: boolean;
+  readonly terminalOpen: boolean;
+}
+
+/**
+ * A task draft uses an approved repository as an internal bootstrap anchor,
+ * but that repository is not the task's workspace. Keep repository-derived UI
+ * disconnected until the draft is promoted and the server supplies the real
+ * task workspace.
+ */
+export function deriveRepositoryUiContext(input: {
+  readonly isTaskDraft: boolean;
+  readonly projectRef: ScopedProjectRef | null;
+  readonly projectCwd: string | null;
+  readonly worktreePath: string | null;
+  readonly storedRightPanelOpen: boolean;
+  readonly storedTerminalOpen: boolean;
+}): RepositoryUiContext {
+  if (input.isTaskDraft) {
+    return {
+      projectRef: null,
+      projectCwd: null,
+      worktreePath: null,
+      rightPanelOpen: false,
+      terminalOpen: false,
+    };
+  }
+  return {
+    projectRef: input.projectRef,
+    projectCwd: input.projectCwd,
+    worktreePath: input.worktreePath,
+    rightPanelOpen: input.storedRightPanelOpen,
+    terminalOpen: input.storedTerminalOpen,
+  };
+}
+
+export function taskDraftRepositorySendBlockReason(input: {
+  readonly isTaskDraft: boolean;
+  readonly repositoriesLoaded: boolean;
+  readonly recoveryChanged: boolean;
+  readonly approvedProjectCount: number;
+}): string | null {
+  if (!input.isTaskDraft) {
+    return null;
+  }
+  if (!input.repositoriesLoaded) {
+    return "Wait for the available repositories to finish loading before sending.";
+  }
+  if (input.recoveryChanged) {
+    return "The approved repository list changed. Review the updated draft, then send again.";
+  }
+  if (input.approvedProjectCount === 0) {
+    return "None of this draft's approved repositories are still available. Use New task in the sidebar to choose repositories again.";
+  }
+  return null;
 }
 
 export function buildLocalDraftThread(

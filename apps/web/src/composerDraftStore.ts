@@ -71,6 +71,48 @@ export const TaskDraftContext = Schema.Struct({
 export type TaskDraftContext = typeof TaskDraftContext.Type;
 const isTaskDraftContext = Schema.is(TaskDraftContext);
 
+export interface TaskDraftRepositoryRecovery {
+  readonly taskDraft: TaskDraftContext;
+  readonly anchorProjectId: ProjectId | null;
+  readonly changed: boolean;
+}
+
+/**
+ * Reconciles persisted task approvals with the repositories the current shell
+ * still exposes. The approved set is an allow-list: recovery may remove stale
+ * entries, but it must never grant a newly discovered repository.
+ */
+export function reconcileTaskDraftRepositories(input: {
+  readonly taskDraft: TaskDraftContext;
+  readonly anchorProjectId: ProjectId;
+  readonly availableProjectIds: ReadonlyArray<ProjectId>;
+}): TaskDraftRepositoryRecovery {
+  const availableProjectIds = new Set(input.availableProjectIds);
+  const approvedProjectIds = input.taskDraft.approvedProjectIds.filter((projectId) =>
+    availableProjectIds.has(projectId),
+  );
+  const anchorProjectId = approvedProjectIds.includes(input.anchorProjectId)
+    ? input.anchorProjectId
+    : (approvedProjectIds[0] ?? null);
+  const approvalsChanged =
+    approvedProjectIds.length !== input.taskDraft.approvedProjectIds.length ||
+    approvedProjectIds.some(
+      (projectId, index) => projectId !== input.taskDraft.approvedProjectIds[index],
+    );
+
+  return {
+    taskDraft: approvalsChanged
+      ? {
+          ...input.taskDraft,
+          approvedProjectIds,
+        }
+      : input.taskDraft,
+    anchorProjectId,
+    changed:
+      approvalsChanged || (anchorProjectId !== null && anchorProjectId !== input.anchorProjectId),
+  };
+}
+
 export const DraftId = Schema.String.pipe(Schema.brand("DraftId"));
 export type DraftId = typeof DraftId.Type;
 
