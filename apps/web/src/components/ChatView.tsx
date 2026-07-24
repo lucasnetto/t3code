@@ -1423,6 +1423,11 @@ function ChatViewContent(props: ChatViewProps) {
   const createTaskThread = useNewTaskThreadHandler();
   const approveTaskRepository = useAtomCommand(taskEnvironment.approveRepository, {
     label: "approve task repository",
+    reportFailure: false,
+  });
+  const updateTask = useAtomCommand(taskEnvironment.update, {
+    label: "update task",
+    reportFailure: false,
   });
   const [taskManagementOpen, setTaskManagementOpen] = useState(false);
   const canCheckoutPullRequestIntoThread = isLocalDraftThread && !isTaskDraft;
@@ -1643,15 +1648,36 @@ function ChatViewContent(props: ChatViewProps) {
       if (activeTask === null) {
         return;
       }
-      await approveTaskRepository({
+      const result = await approveTaskRepository({
         environmentId: activeTask.environmentId,
         input: {
           taskId: activeTask.id,
           projectId: project.id,
         },
       });
+      if (result._tag === "Failure") {
+        throw squashAtomCommandFailure(result);
+      }
     },
     [activeTask, approveTaskRepository],
+  );
+  const handleUpdateTaskTitle = useCallback(
+    async (title: string) => {
+      if (activeTask === null) {
+        return;
+      }
+      const result = await updateTask({
+        environmentId: activeTask.environmentId,
+        input: {
+          taskId: activeTask.id,
+          title,
+        },
+      });
+      if (result._tag === "Failure") {
+        throw squashAtomCommandFailure(result);
+      }
+    },
+    [activeTask, updateTask],
   );
   const handleCreateTaskThread = useCallback(async () => {
     if (activeTask === null) {
@@ -5918,10 +5944,12 @@ function ChatViewContent(props: ChatViewProps) {
       )}
       {activeTask ? (
         <TaskManagementDialog
+          key={`${activeTask.environmentId}:${activeTask.id}`}
           open={taskManagementOpen}
           onOpenChange={setTaskManagementOpen}
           task={activeTask}
           projects={taskProjects}
+          onUpdateTitle={handleUpdateTaskTitle}
           onApproveProject={handleApproveTaskProject}
           onCreateThread={handleCreateTaskThread}
         />
