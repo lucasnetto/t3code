@@ -1617,7 +1617,7 @@ it.effect(
             runtimePayload: {
               modelSelection: inheritedModelSelection,
               interactionMode: "plan",
-              activeTurnId: TurnId.make("provider-turn-active"),
+              activeTurnId: TurnId.make("turn-caller"),
             },
           }),
         ),
@@ -1665,6 +1665,99 @@ it.effect(
           undefined,
           undefined,
           activeProviderSessionDirectory,
+        ),
+      ),
+    );
+  },
+);
+
+it.effect(
+  "rejects a provider binding for a different active turn and cleans up its worktree",
+  () => {
+    const dispatchedCommands: Array<import("@t3tools/contracts").OrchestrationCommand> = [];
+    const cleanupInputs: Array<
+      Parameters<GitWorkflowService.GitWorkflowService["Service"]["cleanupCreatedWorktree"]>[0]
+    > = [];
+    const gitWorkflow = {
+      listRefs: () => currentBranchRefPage(),
+      createWorktree: () =>
+        Effect.succeed(
+          createdWorktreeResult(
+            "t3-task-provider-turn-mismatch",
+            "/tmp/task/worktrees/provider-turn-mismatch",
+          ),
+        ),
+      cleanupCreatedWorktree: (
+        input: Parameters<
+          GitWorkflowService.GitWorkflowService["Service"]["cleanupCreatedWorktree"]
+        >[0],
+      ) =>
+        Effect.sync(() => {
+          cleanupInputs.push(input);
+          return { branch: "deleted" as const };
+        }),
+    } as unknown as GitWorkflowService.GitWorkflowService["Service"];
+    const mismatchedProviderSessionDirectory = {
+      getBinding: (threadId: ThreadId) =>
+        Effect.succeed(
+          Option.some({
+            threadId,
+            provider: "codex",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            status: "running",
+            runtimeMode: "full-access",
+            runtimePayload: {
+              modelSelection: caller.modelSelection,
+              interactionMode: caller.interactionMode,
+              activeTurnId: TurnId.make("turn-caller-replacement"),
+            },
+          }),
+        ),
+    } as unknown as ProviderSessionDirectory.ProviderSessionDirectory["Service"];
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const server = yield* McpServer.McpServer;
+        const result = yield* server
+          .callTool({
+            name: "task_spawn_thread",
+            arguments: {
+              projectId,
+              message: "Do not spawn from a stale provider turn binding.",
+            },
+          })
+          .pipe(
+            Effect.provideService(
+              McpInvocationContext.McpInvocationContext,
+              invocation(new Set(["task"])),
+            ),
+            Effect.provideService(McpSchema.McpServerClient, client),
+          );
+
+        expect(result.isError).toBe(true);
+        expect(toolErrorText(result)).toContain(
+          "The active calling provider turn no longer matches the spawning turn.",
+        );
+        expect(dispatchedCommands).toEqual([]);
+        expect(cleanupInputs).toEqual([
+          {
+            cwd: "/tmp/api",
+            path: "/tmp/task/worktrees/provider-turn-mismatch",
+            createdBranch: createdWorktreeResult("t3-task-provider-turn-mismatch", "/unused")
+              .createdBranch,
+          },
+        ]);
+      }),
+    ).pipe(
+      Effect.provide(
+        makeCoordinationTestLayer(
+          dispatchedCommands,
+          makeQuery([caller, child]),
+          gitWorkflow,
+          undefined,
+          undefined,
+          undefined,
+          mismatchedProviderSessionDirectory,
         ),
       ),
     );
