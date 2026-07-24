@@ -328,6 +328,69 @@ function gitCommandContext(
   } as const;
 }
 
+function worktreeConfigurationCleanupError(input: {
+  readonly configurationError: GitCommandError;
+  readonly cleanupError?: GitCommandError;
+  readonly branchRetentionReason?: string;
+  readonly branchName: string;
+  readonly worktreePath: string;
+}): GitCommandError {
+  const { configurationError, cleanupError, branchRetentionReason, branchName, worktreePath } =
+    input;
+  const cleanupDetail = cleanupError
+    ? `Cleanup also failed; the created worktree and branch '${branchName}' remain at ${worktreePath}.`
+    : `The created worktree was removed, but branch '${branchName}' was retained: ${branchRetentionReason}`;
+  return new GitCommandError({
+    operation: configurationError.operation,
+    command: configurationError.command,
+    cwd: configurationError.cwd,
+    ...(configurationError.argumentCount === undefined
+      ? {}
+      : { argumentCount: configurationError.argumentCount }),
+    ...(configurationError.exitCode === undefined ? {} : { exitCode: configurationError.exitCode }),
+    ...(configurationError.stdoutLength === undefined
+      ? {}
+      : { stdoutLength: configurationError.stdoutLength }),
+    ...(configurationError.stderrLength === undefined
+      ? {}
+      : { stderrLength: configurationError.stderrLength }),
+    ...(configurationError.outputLength === undefined
+      ? {}
+      : { outputLength: configurationError.outputLength }),
+    detail: `${configurationError.detail} ${cleanupDetail}`,
+    cause: cleanupError
+      ? new AggregateError(
+          [configurationError, cleanupError],
+          `Worktree configuration and cleanup both failed for ${worktreePath}.`,
+          { cause: configurationError },
+        )
+      : configurationError,
+  });
+}
+
+function checkedOutWorktreePathForBranch(input: {
+  readonly branchName: string;
+  readonly porcelain: string;
+}): string | null {
+  const targetRef = `refs/heads/${input.branchName}`;
+  let currentWorktreePath: string | null = null;
+
+  for (const line of input.porcelain.split("\n")) {
+    if (line.startsWith("worktree ")) {
+      currentWorktreePath = line.slice("worktree ".length);
+      continue;
+    }
+    if (line === `branch ${targetRef}`) {
+      return currentWorktreePath;
+    }
+    if (line.length === 0) {
+      currentWorktreePath = null;
+    }
+  }
+
+  return null;
+}
+
 function parseDefaultBranchFromRemoteHeadRef(value: string, remoteName: string): string | null {
   const trimmed = value.trim();
   const prefix = `refs/remotes/${remoteName}/`;
@@ -2261,6 +2324,86 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     },
   );
 
+  const cleanupCreatedWorktree: GitVcsDriver.GitVcsDriver["Service"]["cleanupCreatedWorktree"] =
+    Effect.fn("cleanupCreatedWorktree")(function* (input) {
+      yield* executeGit(
+        "GitVcsDriver.cleanupCreatedWorktree.removeWorktree",
+        input.cwd,
+        ["worktree", "remove", input.path],
+        {
+          timeoutMs: 15_000,
+          fallbackErrorDetail: "git worktree remove failed",
+        },
+      );
+
+      const branchRef = `refs/heads/${input.createdBranch.refName}`;
+      return yield* Effect.gen(function* () {
+        const branchExistsResult = yield* executeGit(
+          "GitVcsDriver.cleanupCreatedWorktree.branchExists",
+          input.cwd,
+          ["show-ref", "--verify", "--quiet", branchRef],
+          {
+            allowNonZeroExit: true,
+            timeoutMs: 5_000,
+          },
+        );
+        if (branchExistsResult.exitCode === 1) {
+          return { branch: "absent" as const };
+        }
+        if (branchExistsResult.exitCode !== 0) {
+          const commandDetail =
+            branchExistsResult.stderr.trim() || branchExistsResult.stdout.trim();
+          return {
+            branch: "retained" as const,
+            reason: `branch existence check exited with code ${branchExistsResult.exitCode}${commandDetail ? `: ${commandDetail}` : ""}`,
+          };
+        }
+
+        const branchCommit = yield* runGitStdout(
+          "GitVcsDriver.cleanupCreatedWorktree.resolveBranch",
+          input.cwd,
+          ["rev-parse", "--verify", `${branchRef}^{commit}`],
+        ).pipe(Effect.map((stdout) => stdout.trim()));
+        if (branchCommit !== input.createdBranch.commitSha) {
+          return {
+            branch: "retained" as const,
+            reason: `branch moved from created commit ${input.createdBranch.commitSha} to ${branchCommit}`,
+          };
+        }
+
+        const worktreeList = yield* runGitStdout(
+          "GitVcsDriver.cleanupCreatedWorktree.listWorktrees",
+          input.cwd,
+          ["worktree", "list", "--porcelain"],
+        );
+        const checkedOutPath = checkedOutWorktreePathForBranch({
+          branchName: input.createdBranch.refName,
+          porcelain: worktreeList,
+        });
+        if (checkedOutPath) {
+          return {
+            branch: "retained" as const,
+            reason: `branch is checked out in worktree ${checkedOutPath}`,
+          };
+        }
+
+        yield* runGit("GitVcsDriver.cleanupCreatedWorktree.deleteBranch", input.cwd, [
+          "update-ref",
+          "-d",
+          branchRef,
+          input.createdBranch.commitSha,
+        ]);
+        return { branch: "deleted" as const };
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.succeed({
+            branch: "retained" as const,
+            reason: `branch safety verification failed: ${error.detail}`,
+          }),
+        ),
+      );
+    });
+
   const createWorktree: GitVcsDriver.GitVcsDriver["Service"]["createWorktree"] = Effect.fn(
     "createWorktree",
   )(function* (input) {
@@ -2268,6 +2411,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const sanitizedBranch = targetBranch.replace(/\//g, "-");
     const repoName = path.basename(input.cwd);
     const worktreePath = input.path ?? path.join(worktreesDir, repoName, sanitizedBranch);
+    const createdCommitSha = input.newRefName
+      ? yield* runGitStdout("GitVcsDriver.createWorktree.resolveCreatedCommit", input.cwd, [
+          "rev-parse",
+          "--verify",
+          `${input.refName}^{commit}`,
+        ]).pipe(Effect.map((stdout) => stdout.trim()))
+      : null;
     const args = input.newRefName
       ? ["worktree", "add", "-b", input.newRefName, worktreePath, input.refName]
       : ["worktree", "add", worktreePath, input.refName];
@@ -2276,7 +2426,11 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       fallbackErrorDetail: "git worktree add failed",
     });
 
-    if (input.newRefName && input.baseRefName) {
+    if (input.newRefName && input.baseRefName && createdCommitSha) {
+      const createdBranch = {
+        refName: input.newRefName,
+        commitSha: createdCommitSha,
+      };
       const remoteNames = yield* listRemoteNames(input.cwd).pipe(Effect.orElseSucceed(() => []));
       const parsedBaseRef = parseRemoteRefWithRemoteNames(
         input.baseRefName,
@@ -2287,7 +2441,39 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         "config",
         `branch.${input.newRefName}.gh-merge-base`,
         baseBranch,
-      ]);
+      ]).pipe(
+        Effect.catch((configurationError) =>
+          cleanupCreatedWorktree({
+            cwd: input.cwd,
+            path: worktreePath,
+            createdBranch,
+          }).pipe(
+            Effect.matchEffect({
+              onFailure: (cleanupError) =>
+                Effect.fail(
+                  worktreeConfigurationCleanupError({
+                    configurationError,
+                    cleanupError,
+                    branchName: createdBranch.refName,
+                    worktreePath,
+                  }),
+                ),
+              onSuccess: (cleanup) =>
+                cleanup.branch === "retained"
+                  ? Effect.fail(
+                      worktreeConfigurationCleanupError({
+                        configurationError,
+                        branchRetentionReason: cleanup.reason,
+                        branchName: createdBranch.refName,
+                        worktreePath,
+                      }),
+                    )
+                  : Effect.fail(configurationError),
+            }),
+            Effect.uninterruptible,
+          ),
+        ),
+      );
     }
 
     return {
@@ -2295,6 +2481,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         path: worktreePath,
         refName: targetBranch,
       },
+      ...(input.newRefName && createdCommitSha
+        ? {
+            createdBranch: {
+              refName: input.newRefName,
+              commitSha: createdCommitSha,
+            },
+          }
+        : {}),
     };
   });
 
@@ -2563,6 +2757,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     readConfigValue,
     listRefs,
     createWorktree,
+    cleanupCreatedWorktree,
     fetchPullRequestBranch,
     ensureRemote,
     resolvePrimaryRemoteName,
