@@ -52,6 +52,19 @@ export class CheckpointWorkspacePathMissingError extends Schema.TaggedErrorClass
   }
 }
 
+/** The checkpoint workspace path does not resolve to an available Git checkout. */
+export class CheckpointWorkspaceUnavailableError extends Schema.TaggedErrorClass<CheckpointWorkspaceUnavailableError>()(
+  "CheckpointWorkspaceUnavailableError",
+  {
+    operation: CheckpointDiffOperation,
+    threadId: ThreadId,
+  },
+) {
+  override get message(): string {
+    return `Checkpoint workspace is unavailable for thread '${this.threadId}'.`;
+  }
+}
+
 /** The requested turn lies beyond the latest available checkpoint. */
 export class CheckpointTurnRangeUnavailableError extends Schema.TaggedErrorClass<CheckpointTurnRangeUnavailableError>()(
   "CheckpointTurnRangeUnavailableError",
@@ -90,5 +103,6 @@ export type CheckpointServiceError =
   | CheckpointDiffResultInvalidError
   | CheckpointThreadNotFoundError
   | CheckpointWorkspacePathMissingError
+  | CheckpointWorkspaceUnavailableError
   | CheckpointTurnRangeUnavailableError
   | CheckpointRefUnavailableError;
