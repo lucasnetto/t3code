@@ -439,137 +439,137 @@ const paginateList = Effect.fn("TaskToolkit.paginateList")(function* <T>(
 });
 
 const handlers = {
-  task_list_repositories: ({ cursor, maxItems }) =>
-    Effect.gen(function* () {
-      const operation = "task.list_repositories";
-      const scope = yield* requireTaskScope(operation);
-      const approved = new Set(scope.task.approvedProjectIds);
-      const page = yield* paginateList(
-        scope.projects.filter((project) => approved.has(project.id)),
-        cursor,
-        listLimit(maxItems),
-        scope.task.id,
-        "repositories",
-        (project) => project.id,
-        operation,
+  task_list_repositories: Effect.fn("TaskToolkit.listRepositories")(function* ({
+    cursor,
+    maxItems,
+  }) {
+    const operation = "task.list_repositories";
+    const scope = yield* requireTaskScope(operation);
+    const approved = new Set(scope.task.approvedProjectIds);
+    const page = yield* paginateList(
+      scope.projects.filter((project) => approved.has(project.id)),
+      cursor,
+      listLimit(maxItems),
+      scope.task.id,
+      "repositories",
+      (project) => project.id,
+      operation,
+    );
+    return {
+      taskId: scope.task.id,
+      repositories: page.items.map((project) => ({
+        projectId: project.id,
+        title: project.title,
+        workspaceRoot: project.workspaceRoot,
+      })),
+      nextCursor: page.nextCursor,
+    };
+  }),
+  task_list_threads: Effect.fn("TaskToolkit.listThreads")(function* ({ cursor, maxItems }) {
+    const operation = "task.list_threads";
+    const scope = yield* requireTaskScope(operation);
+    const page = yield* paginateList(
+      scope.threads,
+      cursor,
+      listLimit(maxItems),
+      scope.task.id,
+      "threads",
+      (thread) => thread.id,
+      operation,
+    );
+    return {
+      taskId: scope.task.id,
+      threads: page.items.map((thread) => taskThreadSummary(thread, scope.task)),
+      nextCursor: page.nextCursor,
+    };
+  }),
+  task_get_thread_status: Effect.fn("TaskToolkit.getThreadStatus")(function* ({ threadId }) {
+    const scope = yield* requireTaskScope("task.get_thread_status");
+    return taskThreadSummary(
+      yield* requireTaskThread(scope, threadId, "task.get_thread_status"),
+      scope.task,
+    );
+  }),
+  task_read_thread: Effect.fn("TaskToolkit.readThread")(function* ({ threadId, cursor, maxChars }) {
+    const operation = "task.read_thread";
+    const scope = yield* requireTaskScope(operation);
+    yield* requireTaskThread(scope, threadId, operation);
+    const query = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+    const detail = yield* query
+      .getThreadDetailById(threadId)
+      .pipe(Effect.mapError(() => failTaskTool(operation, `Could not read thread '${threadId}'.`)));
+    if (Option.isNone(detail)) {
+      return yield* failTaskTool(operation, `Thread '${threadId}' was not found.`);
+    }
+    const page = yield* paginateTranscript(
+      detail.value.messages,
+      cursor,
+      transcriptLimit(maxChars),
+      operation,
+    );
+    return {
+      threadId,
+      ...page,
+    };
+  }),
+  task_get_thread_diff: Effect.fn("TaskToolkit.getThreadDiff")(function* ({
+    threadId,
+    fromTurn,
+    toTurn,
+  }) {
+    const operation = "task.get_thread_diff";
+    const scope = yield* requireTaskScope(operation);
+    const thread = yield* requireTaskThread(scope, threadId, operation);
+    if (!thread.worktreePath) {
+      return yield* diffFail(
+        "checkout-unavailable",
+        `Thread '${threadId}' has no available Git checkout.`,
       );
-      return {
-        taskId: scope.task.id,
-        repositories: page.items.map((project) => ({
-          projectId: project.id,
-          title: project.title,
-          workspaceRoot: project.workspaceRoot,
-        })),
-        nextCursor: page.nextCursor,
-      };
-    }),
-  task_list_threads: ({ cursor, maxItems }) =>
-    Effect.gen(function* () {
-      const operation = "task.list_threads";
-      const scope = yield* requireTaskScope(operation);
-      const page = yield* paginateList(
-        scope.threads,
-        cursor,
-        listLimit(maxItems),
-        scope.task.id,
-        "threads",
-        (thread) => thread.id,
-        operation,
+    }
+    const query = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+    const detail = yield* query
+      .getThreadDetailById(threadId)
+      .pipe(
+        Effect.mapError(() => failTaskTool(operation, `Could not inspect thread '${threadId}'.`)),
       );
-      return {
-        taskId: scope.task.id,
-        threads: page.items.map((thread) => taskThreadSummary(thread, scope.task)),
-        nextCursor: page.nextCursor,
-      };
-    }),
-  task_get_thread_status: ({ threadId }) =>
-    Effect.gen(function* () {
-      const scope = yield* requireTaskScope("task.get_thread_status");
-      return taskThreadSummary(
-        yield* requireTaskThread(scope, threadId, "task.get_thread_status"),
-        scope.task,
+    if (Option.isNone(detail)) {
+      return yield* failTaskTool(operation, `Thread '${threadId}' was not found.`);
+    }
+    const lastTurn = detail.value.checkpoints.reduce(
+      (maximum, checkpoint) => Math.max(maximum, checkpoint.checkpointTurnCount),
+      0,
+    );
+    const resolvedFrom = fromTurn ?? 0;
+    const resolvedTo = toTurn ?? lastTurn;
+    if (resolvedTo === 0) {
+      return yield* diffFail(
+        "checkpoint-unavailable",
+        `Thread '${threadId}' has no completed Git checkpoint.`,
       );
-    }),
-  task_read_thread: ({ threadId, cursor, maxChars }) =>
-    Effect.gen(function* () {
-      const operation = "task.read_thread";
-      const scope = yield* requireTaskScope(operation);
-      yield* requireTaskThread(scope, threadId, operation);
-      const query = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
-      const detail = yield* query
-        .getThreadDetailById(threadId)
-        .pipe(
-          Effect.mapError(() => failTaskTool(operation, `Could not read thread '${threadId}'.`)),
-        );
-      if (Option.isNone(detail)) {
-        return yield* failTaskTool(operation, `Thread '${threadId}' was not found.`);
-      }
-      const page = yield* paginateTranscript(
-        detail.value.messages,
-        cursor,
-        transcriptLimit(maxChars),
-        operation,
+    }
+    if (resolvedFrom > resolvedTo || resolvedFrom > lastTurn || resolvedTo > lastTurn) {
+      return yield* diffFail(
+        "invalid-range",
+        `The requested turn range is unavailable for '${threadId}'.`,
       );
-      return {
+    }
+    const checkpointDiff = yield* CheckpointDiffQuery.CheckpointDiffQuery;
+    const result = yield* checkpointDiff
+      .getTurnDiff({
         threadId,
-        ...page,
-      };
-    }),
-  task_get_thread_diff: ({ threadId, fromTurn, toTurn }) =>
-    Effect.gen(function* () {
-      const operation = "task.get_thread_diff";
-      const scope = yield* requireTaskScope(operation);
-      const thread = yield* requireTaskThread(scope, threadId, operation);
-      if (!thread.worktreePath) {
-        return yield* diffFail(
-          "checkout-unavailable",
-          `Thread '${threadId}' has no available Git checkout.`,
-        );
-      }
-      const query = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
-      const detail = yield* query
-        .getThreadDetailById(threadId)
-        .pipe(
-          Effect.mapError(() => failTaskTool(operation, `Could not inspect thread '${threadId}'.`)),
-        );
-      if (Option.isNone(detail)) {
-        return yield* failTaskTool(operation, `Thread '${threadId}' was not found.`);
-      }
-      const lastTurn = detail.value.checkpoints.reduce(
-        (maximum, checkpoint) => Math.max(maximum, checkpoint.checkpointTurnCount),
-        0,
-      );
-      const resolvedFrom = fromTurn ?? 0;
-      const resolvedTo = toTurn ?? lastTurn;
-      if (resolvedTo === 0) {
-        return yield* diffFail(
-          "checkpoint-unavailable",
-          `Thread '${threadId}' has no completed Git checkpoint.`,
-        );
-      }
-      if (resolvedFrom > resolvedTo || resolvedFrom > lastTurn || resolvedTo > lastTurn) {
-        return yield* diffFail(
-          "invalid-range",
-          `The requested turn range is unavailable for '${threadId}'.`,
-        );
-      }
-      const checkpointDiff = yield* CheckpointDiffQuery.CheckpointDiffQuery;
-      const result = yield* checkpointDiff
-        .getTurnDiff({
-          threadId,
-          fromTurnCount: resolvedFrom,
-          toTurnCount: resolvedTo,
-          ignoreWhitespace: true,
-        })
-        .pipe(Effect.mapError((error) => classifyCheckpointDiffError(threadId, error)));
-      return {
-        threadId,
-        fromTurn: result.fromTurnCount,
-        toTurn: result.toTurnCount,
-        diff: result.diff.slice(0, MAX_DIFF_CHARS),
-        truncated: result.diff.length > MAX_DIFF_CHARS,
-      };
-    }),
+        fromTurnCount: resolvedFrom,
+        toTurnCount: resolvedTo,
+        ignoreWhitespace: true,
+      })
+      .pipe(Effect.mapError((error) => classifyCheckpointDiffError(threadId, error)));
+    return {
+      threadId,
+      fromTurn: result.fromTurnCount,
+      toTurn: result.toTurnCount,
+      diff: result.diff.slice(0, MAX_DIFF_CHARS),
+      truncated: result.diff.length > MAX_DIFF_CHARS,
+    };
+  }),
 } satisfies Parameters<typeof TaskToolkit.toLayer>[0];
 
 export const TaskToolkitHandlersLive = TaskToolkit.toLayer(handlers);
