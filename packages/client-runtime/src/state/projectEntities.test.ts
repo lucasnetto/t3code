@@ -77,5 +77,57 @@ describe("environment project projections", () => {
         }),
       ),
     ).toBeNull();
+    expect(
+      registry
+        .get(atoms.environmentProjectIncludingInternalIndexAtom(environmentId))
+        .has(internalProjectId),
+    ).toBe(true);
+    expect(
+      registry.get(
+        atoms.projectIncludingInternalAtom({
+          environmentId,
+          projectId: internalProjectId,
+        }),
+      ),
+    ).toMatchObject({
+      environmentId,
+      id: internalProjectId,
+      workspaceRoot: "/tmp/task",
+      visibility: "internal-task",
+    });
+  });
+
+  it("resolves standalone projects identically in ordinary and contextual lookups", () => {
+    const catalogValueAtom = Atom.make<EnvironmentCatalogState>({
+      isReady: true,
+      entries: new Map([
+        [
+          environmentId,
+          {
+            target: new PrimaryConnectionTarget({
+              environmentId,
+              label: "Environment",
+              httpBaseUrl: "https://example.test",
+              wsBaseUrl: "wss://example.test",
+            }),
+            profile: Option.none(),
+          },
+        ],
+      ]),
+    });
+    const snapshotAtom = Atom.make<OrchestrationShellSnapshot | null>(snapshot);
+    const atoms = createEnvironmentProjectAtoms({
+      catalogValueAtom,
+      snapshotAtom: () => snapshotAtom,
+    });
+    const registry = AtomRegistry.make();
+    const ref = {
+      environmentId,
+      projectId: visibleProjectId,
+    };
+
+    expect(registry.get(atoms.projectIncludingInternalAtom(ref))).toEqual(
+      registry.get(atoms.projectAtom(ref)),
+    );
   });
 });

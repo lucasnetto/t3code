@@ -25,6 +25,7 @@ import { environmentTasks } from "./tasks";
 import { environmentServerConfigsAtom } from "./server";
 import { allEnvironmentShellsBootstrappedAtom } from "./shell";
 import { environmentThreadDetails, environmentThreadShells } from "./threads";
+import { threadProjectRef, type ThreadProjectContext } from "./threadProject";
 
 const EMPTY_PROJECT_REFS: ReadonlyArray<ScopedProjectRef> = Object.freeze([]);
 const EMPTY_TASK_REFS: ReadonlyArray<ScopedTaskRef> = Object.freeze([]);
@@ -154,6 +155,22 @@ export function useProject(ref: ScopedProjectRef | null): EnvironmentProject | n
   return useAtomValue(ref === null ? EMPTY_PROJECT_ATOM : environmentProjects.projectAtom(ref));
 }
 
+/**
+ * Resolve the workspace project for an existing thread/task context. Unlike
+ * ordinary project selectors, this includes hidden task workspace projects.
+ */
+export function useProjectIncludingInternal(
+  ref: ScopedProjectRef | null,
+): EnvironmentProject | null {
+  return useAtomValue(
+    ref === null ? EMPTY_PROJECT_ATOM : environmentProjects.projectIncludingInternalAtom(ref),
+  );
+}
+
+export function useThreadProject(thread: ThreadProjectContext | null): EnvironmentProject | null {
+  return useProjectIncludingInternal(thread === null ? null : threadProjectRef(thread));
+}
+
 export function useTask(ref: ScopedTaskRef | null): EnvironmentTask | null {
   return useAtomValue(ref === null ? EMPTY_TASK_ATOM : environmentTasks.taskAtom(ref));
 }
@@ -209,6 +226,12 @@ export function useThreadSession(ref: ScopedThreadRef | null): OrchestrationSess
 
 export function readProject(ref: ScopedProjectRef): EnvironmentProject | null {
   return appAtomRegistry.get(environmentProjects.projectAtom(ref));
+}
+
+export function readThreadProject(thread: ThreadProjectContext): EnvironmentProject | null {
+  return appAtomRegistry.get(
+    environmentProjects.projectIncludingInternalAtom(threadProjectRef(thread)),
+  );
 }
 
 export function readThreadShell(ref: ScopedThreadRef): EnvironmentThreadShell | null {

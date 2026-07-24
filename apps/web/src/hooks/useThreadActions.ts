@@ -23,7 +23,7 @@ import { readLocalApi } from "../localApi";
 import {
   readEnvironmentSupportsSettlement,
   readEnvironmentThreadRefs,
-  readProject,
+  readThreadProject,
   readThreadShell,
 } from "../state/entities";
 import { useTerminalUiStateStore } from "../terminalUiStateStore";
@@ -202,10 +202,7 @@ export function useThreadActions() {
         const shell = readThreadShell(ref);
         return shell === null ? [] : [shell];
       });
-      const threadProject = readProject({
-        environmentId: threadRef.environmentId,
-        projectId: thread.projectId,
-      });
+      const threadProject = readThreadProject(thread);
       const deletedIds =
         opts.deletedThreadKeys && opts.deletedThreadKeys.size > 0
           ? new Set<ThreadId>(

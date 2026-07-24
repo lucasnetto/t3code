@@ -15,6 +15,10 @@ import { arrayElementsEqual, parseProjectKey, projectKey, projectRefsEqual } fro
 const EMPTY_PROJECTS: ReadonlyArray<OrchestrationProjectShell> = Object.freeze([]);
 const EMPTY_PROJECT_INDEX: ReadonlyMap<ProjectId, OrchestrationProjectShell> = new Map();
 
+export function isOrdinaryProjectShell(project: OrchestrationProjectShell): boolean {
+  return project.visibility !== "internal-task";
+}
+
 export function createEnvironmentProjectAtoms(input: {
   readonly catalogValueAtom: Atom.Atom<EnvironmentCatalogState>;
   readonly snapshotAtom: (
@@ -24,9 +28,8 @@ export function createEnvironmentProjectAtoms(input: {
   const environmentProjectsAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make(
       (get): ReadonlyArray<OrchestrationProjectShell> =>
-        get(input.snapshotAtom(environmentId))?.projects.filter(
-          (project) => project.visibility !== "internal-task",
-        ) ?? EMPTY_PROJECTS,
+        get(input.snapshotAtom(environmentId))?.projects.filter(isOrdinaryProjectShell) ??
+        EMPTY_PROJECTS,
     ).pipe(Atom.withLabel(`environment-projects:${environmentId}`)),
   );
 
@@ -38,6 +41,21 @@ export function createEnvironmentProjectAtoms(input: {
       }
       return new Map(projects.map((project) => [project.id, project] as const));
     }).pipe(Atom.withLabel(`environment-project-index:${environmentId}`)),
+  );
+
+  /**
+   * Contextual workspace consumers already hold a thread or task reference and
+   * must be able to resolve its backing project even when that project is
+   * intentionally absent from ordinary project collections and selectors.
+   */
+  const environmentProjectIncludingInternalIndexAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get): ReadonlyMap<ProjectId, OrchestrationProjectShell> => {
+      const projects = get(input.snapshotAtom(environmentId))?.projects ?? EMPTY_PROJECTS;
+      if (projects.length === 0) {
+        return EMPTY_PROJECT_INDEX;
+      }
+      return new Map(projects.map((project) => [project.id, project] as const));
+    }).pipe(Atom.withLabel(`environment-project-including-internal-index:${environmentId}`)),
   );
 
   const environmentProjectRefsAtom = Atom.family((environmentId: EnvironmentId) => {
@@ -70,6 +88,23 @@ export function createEnvironmentProjectAtoms(input: {
     }).pipe(Atom.withLabel(`environment-project:${key}`));
   });
 
+  const projectIncludingInternalAtomFamily = Atom.family((key: string) => {
+    const ref = parseProjectKey(key);
+    let previousSource: OrchestrationProjectShell | null = null;
+    let previousValue: EnvironmentProject | null = null;
+    return Atom.make((get) => {
+      const source =
+        get(environmentProjectIncludingInternalIndexAtom(ref.environmentId)).get(ref.projectId) ??
+        null;
+      if (source === previousSource) {
+        return previousValue;
+      }
+      previousSource = source;
+      previousValue = source === null ? null : scopeProject(ref.environmentId, source);
+      return previousValue;
+    }).pipe(Atom.withLabel(`environment-project-including-internal:${key}`));
+  });
+
   let previousProjectRefs: ReadonlyArray<ScopedProjectRef> = [];
   const projectRefsAtom = Atom.make((get) => {
     const refs: ScopedProjectRef[] = [];
@@ -99,9 +134,12 @@ export function createEnvironmentProjectAtoms(input: {
   return {
     environmentProjectsAtom,
     environmentProjectIndexAtom,
+    environmentProjectIncludingInternalIndexAtom,
     environmentProjectRefsAtom,
     projectRefsAtom,
     projectsAtom,
     projectAtom: (ref: ScopedProjectRef) => projectAtomFamily(projectKey(ref)),
+    projectIncludingInternalAtom: (ref: ScopedProjectRef) =>
+      projectIncludingInternalAtomFamily(projectKey(ref)),
   };
 }

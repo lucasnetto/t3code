@@ -33,7 +33,7 @@ import {
   resolveFileDiffPath,
 } from "../lib/diffRendering";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
-import { useProject, useThread } from "../state/entities";
+import { useThread, useThreadProject } from "../state/entities";
 import { resolveThreadRouteRef } from "../threadRoutes";
 import { useClientSettings } from "../hooks/useSettings";
 import { formatShortTimestamp } from "../timestampFormat";
@@ -208,15 +208,7 @@ export default function DiffPanel({
   });
   const activeThreadId = routeThreadRef?.threadId ?? null;
   const activeThread = useThread(routeThreadRef);
-  const activeProjectId = activeThread?.projectId ?? null;
-  const activeProject = useProject(
-    activeThread && activeProjectId
-      ? {
-          environmentId: activeThread.environmentId,
-          projectId: activeProjectId,
-        }
-      : null,
-  );
+  const activeProject = useThreadProject(activeThread);
   const activeCwd = activeThread?.worktreePath ?? activeProject?.workspaceRoot;
   const serverConfig = useAtomValue(
     serverEnvironment.configValueAtom(activeThread?.environmentId ?? null),
