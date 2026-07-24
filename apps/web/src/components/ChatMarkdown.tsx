@@ -124,6 +124,7 @@ interface ChatMarkdownProps {
   className?: string;
   /** Treat single newlines as hard breaks — chat-style user input. */
   lineBreaks?: boolean;
+  externalEditorAvailable?: boolean;
 }
 
 const EMPTY_MARKDOWN_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
@@ -755,7 +756,7 @@ interface MarkdownFileLinkProps {
   copyMarkdown: string;
   theme: "light" | "dark";
   threadRef?: ScopedThreadRef | undefined;
-  onOpen: (targetPath: string) => Promise<AtomCommandResult<unknown, unknown>>;
+  onOpen?: ((targetPath: string) => Promise<AtomCommandResult<unknown, unknown>>) | undefined;
   onOpenInBrowser?: (() => Promise<AtomCommandResult<unknown, unknown>>) | undefined;
   className?: string | undefined;
 }
@@ -1028,6 +1029,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
   className,
 }: MarkdownFileLinkProps) {
   const handleOpenInEditor = useCallback(() => {
+    if (!onOpen) return;
     void (async () => {
       try {
         const result = await onOpen(targetPath);
@@ -1158,7 +1160,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
       try {
         const clicked = await api.contextMenu.show(
           [
-            { id: "open", label: "Open in editor" },
+            ...(onOpen ? ([{ id: "open", label: "Open in editor" }] as const) : []),
             ...(onOpenInBrowser
               ? ([{ id: "open-in-browser", label: "Open in integrated browser" }] as const)
               : []),
@@ -1190,7 +1192,15 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         );
       }
     },
-    [displayPath, handleCopy, handleOpenInBrowser, handleOpenInEditor, onOpenInBrowser, targetPath],
+    [
+      displayPath,
+      handleCopy,
+      handleOpenInBrowser,
+      handleOpenInEditor,
+      onOpen,
+      onOpenInBrowser,
+      targetPath,
+    ],
   );
 
   return (
@@ -1258,6 +1268,7 @@ function ChatMarkdown({
   skills = EMPTY_MARKDOWN_SKILLS,
   className,
   lineBreaks = false,
+  externalEditorAvailable = true,
 }: ChatMarkdownProps) {
   const { resolvedTheme, theme } = useTheme();
   const createAssetUrl = useAtomQueryRunner(assetEnvironment.createUrl, {
@@ -1486,7 +1497,7 @@ function ChatMarkdown({
             copyMarkdown={`[${fileLinkMeta.basename}](${normalizedHref})`}
             theme={resolvedTheme}
             threadRef={threadRef}
-            onOpen={openInPreferredEditor}
+            onOpen={externalEditorAvailable ? openInPreferredEditor : undefined}
             onOpenInBrowser={
               threadRef &&
               isPreviewSupportedInRuntime() &&
@@ -1535,6 +1546,7 @@ function ChatMarkdown({
     }),
     [
       diffThemeName,
+      externalEditorAvailable,
       fileLinkParentSuffixByPath,
       isStreaming,
       markdownFileLinkMetaByHref,

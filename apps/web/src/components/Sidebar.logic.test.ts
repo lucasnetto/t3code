@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import {
   archiveSelectedThreadEntries,
   buildMultiSelectThreadContextMenuItems,
+  buildSidebarV2MultiSelectThreadContextMenuItems,
+  buildSidebarV2ThreadContextMenuItems,
+  buildThreadContextMenuItems,
   createThreadJumpHintVisibilityController,
   getSidebarThreadIdsToPrewarm,
   getVisibleSidebarThreadIds,
@@ -106,6 +109,62 @@ describe("buildMultiSelectThreadContextMenuItems", () => {
     expect(
       buildMultiSelectThreadContextMenuItems({ count: 2, hasRunningThread: true }),
     ).toContainEqual({ id: "archive", label: "Archive (2)", disabled: true });
+  });
+
+  it("keeps mixed selections containing an agent thread local-only", () => {
+    expect(
+      buildMultiSelectThreadContextMenuItems({
+        count: 2,
+        hasRunningThread: false,
+        hasReadOnlyThread: true,
+      }),
+    ).toEqual([{ id: "mark-unread", label: "Mark unread (2)" }]);
+  });
+});
+
+describe("agent-thread sidebar menus", () => {
+  it("keeps only inspection and local unread actions in the classic row menu", () => {
+    expect(buildThreadContextMenuItems({ readOnly: true })).toEqual([
+      { id: "mark-unread", label: "Mark unread" },
+      { id: "copy-path", label: "Copy Path" },
+      { id: "copy-thread-id", label: "Copy Thread ID" },
+    ]);
+  });
+
+  it("keeps only the local unread action in Sidebar V2 row and bulk menus", () => {
+    expect(
+      buildSidebarV2ThreadContextMenuItems({
+        readOnly: true,
+        supportsSettlement: true,
+        isSettled: false,
+      }),
+    ).toEqual([{ id: "mark-unread", label: "Mark unread" }]);
+    expect(
+      buildSidebarV2MultiSelectThreadContextMenuItems({
+        count: 3,
+        hasReadOnlyThread: true,
+      }),
+    ).toEqual([{ id: "mark-unread", label: "Mark unread (3)" }]);
+  });
+
+  it("retains lifecycle, rename, and delete actions for ordinary threads", () => {
+    expect(
+      buildSidebarV2ThreadContextMenuItems({
+        readOnly: false,
+        supportsSettlement: true,
+        isSettled: true,
+      }),
+    ).toEqual([
+      { id: "unsettle", label: "Un-settle thread" },
+      { id: "rename", label: "Rename thread" },
+      { id: "mark-unread", label: "Mark unread" },
+      {
+        id: "delete",
+        label: "Delete",
+        destructive: true,
+        icon: "trash",
+      },
+    ]);
   });
 });
 

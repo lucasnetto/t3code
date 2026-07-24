@@ -74,6 +74,8 @@ import { formatRelativeTimeLabel } from "../timestampFormat";
 import type { SidebarThreadSummary } from "../types";
 import { cn } from "~/lib/utils";
 import {
+  buildSidebarV2MultiSelectThreadContextMenuItems,
+  buildSidebarV2ThreadContextMenuItems,
   firstValidTimestampMs,
   hasUnseenCompletion,
   isTrailingDoubleClick,
@@ -81,6 +83,7 @@ import {
   resolveSidebarV2Status,
   sortThreadsForSidebarV2,
 } from "./Sidebar.logic";
+import { isAgentCreatedTaskThread } from "../lib/threadUiPolicy";
 import { prStatusIndicator, resolveThreadPr } from "./ThreadStatusIndicators";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
@@ -169,6 +172,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
     [thread.environmentId, thread.id],
   );
   const threadKey = scopedThreadKey(threadRef);
+  const isReadOnly = isAgentCreatedTaskThread(thread);
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const isSelected = useThreadSelectionStore((state) => state.selectedThreadKeys.has(threadKey));
   const openPrLink = useOpenPrLink();
@@ -260,14 +264,21 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   );
   const handleDoubleClick = useCallback(
     (event: ReactMouseEvent) => {
-      if (isRenaming || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+      if (
+        isReadOnly ||
+        isRenaming ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey
+      ) {
         return;
       }
       if ((event.target as HTMLElement).closest("button, a, input")) return;
       event.preventDefault();
       onStartRename(threadRef, thread.title);
     },
-    [isRenaming, onStartRename, thread.title, threadRef],
+    [isReadOnly, isRenaming, onStartRename, thread.title, threadRef],
   );
   const renameCommittedRef = useRef(false);
   useEffect(() => {
@@ -325,47 +336,48 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
         : "hover:bg-accent/65",
   );
 
-  const title = isRenaming ? (
-    <input
-      autoFocus
-      value={renamingTitle}
-      aria-label="Thread title"
-      onChange={(event) => onRenameTitleChange(event.target.value)}
-      onFocus={(event) => event.currentTarget.select()}
-      onKeyDown={handleRenameKeyDown}
-      onBlur={handleRenameBlur}
-      onClick={(event) => event.stopPropagation()}
-      onDoubleClick={(event) => event.stopPropagation()}
-      className="min-w-0 flex-1 rounded-sm border border-border bg-background px-1 text-[13px] text-foreground outline-none focus:border-foreground"
-    />
-  ) : (
-    <span
-      className={cn(
-        "min-w-0 flex-1 text-[13px] leading-5",
-        variant === "card"
-          ? cn(
-              "line-clamp-2 break-words",
-              isUnread
-                ? "font-semibold text-foreground"
-                : status !== "ready"
-                  ? "font-semibold text-foreground/95"
-                  : shouldRecede
-                    ? "font-normal text-muted-foreground/75"
-                    : "font-medium text-foreground/90",
-            )
-          : cn(
-              "truncate transition-colors group-hover/v2-row:text-foreground",
-              props.isActive
-                ? "text-foreground"
-                : isUnread
-                  ? "font-medium text-muted-foreground"
-                  : "text-muted-foreground/60",
-            ),
-      )}
-    >
-      {thread.title}
-    </span>
-  );
+  const title =
+    isRenaming && !isReadOnly ? (
+      <input
+        autoFocus
+        value={renamingTitle}
+        aria-label="Thread title"
+        onChange={(event) => onRenameTitleChange(event.target.value)}
+        onFocus={(event) => event.currentTarget.select()}
+        onKeyDown={handleRenameKeyDown}
+        onBlur={handleRenameBlur}
+        onClick={(event) => event.stopPropagation()}
+        onDoubleClick={(event) => event.stopPropagation()}
+        className="min-w-0 flex-1 rounded-sm border border-border bg-background px-1 text-[13px] text-foreground outline-none focus:border-foreground"
+      />
+    ) : (
+      <span
+        className={cn(
+          "min-w-0 flex-1 text-[13px] leading-5",
+          variant === "card"
+            ? cn(
+                "line-clamp-2 break-words",
+                isUnread
+                  ? "font-semibold text-foreground"
+                  : status !== "ready"
+                    ? "font-semibold text-foreground/95"
+                    : shouldRecede
+                      ? "font-normal text-muted-foreground/75"
+                      : "font-medium text-foreground/90",
+              )
+            : cn(
+                "truncate transition-colors group-hover/v2-row:text-foreground",
+                props.isActive
+                  ? "text-foreground"
+                  : isUnread
+                    ? "font-medium text-muted-foreground"
+                    : "text-muted-foreground/60",
+              ),
+        )}
+      >
+        {thread.title}
+      </span>
+    );
 
   const prBadge =
     prStatus && pr ? (
@@ -435,7 +447,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                   )}
               </span>
             </span>
-            {!props.settlementSupported ? null : variantAction === "unsettle" ? (
+            {!props.settlementSupported || isReadOnly ? null : variantAction === "unsettle" ? (
               <button
                 type="button"
                 aria-label="Un-settle thread"
@@ -539,7 +551,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                   threadTimeLabel(thread)
                 )}
               </span>
-              {props.settlementSupported ? (
+              {props.settlementSupported && !isReadOnly ? (
                 <button
                   type="button"
                   aria-label="Settle thread"
@@ -923,13 +935,19 @@ export default function SidebarV2() {
   const [renamingThreadKey, setRenamingThreadKey] = useState<string | null>(null);
   const [renamingTitle, setRenamingTitle] = useState("");
   const startThreadRename = useCallback((threadRef: ScopedThreadRef, title: string) => {
-    setRenamingThreadKey(scopedThreadKey(threadRef));
+    const threadKey = scopedThreadKey(threadRef);
+    if (isAgentCreatedTaskThread(threadByKeyRef.current.get(threadKey))) return;
+    setRenamingThreadKey(threadKey);
     setRenamingTitle(title);
   }, []);
   const cancelThreadRename = useCallback(() => setRenamingThreadKey(null), []);
   const commitThreadRename = useCallback(
     (threadRef: ScopedThreadRef, title: string, originalTitle: string) => {
       void (async () => {
+        if (isAgentCreatedTaskThread(threadByKeyRef.current.get(scopedThreadKey(threadRef)))) {
+          setRenamingThreadKey(null);
+          return;
+        }
         const trimmed = title.trim();
         setRenamingThreadKey(null);
         if (trimmed.length === 0) {
@@ -986,6 +1004,7 @@ export default function SidebarV2() {
     (threadRef: ScopedThreadRef, opts: { coSettlingKeys?: ReadonlySet<string> } = {}) => {
       void (async () => {
         const threadKey = scopedThreadKey(threadRef);
+        if (isAgentCreatedTaskThread(threadByKeyRef.current.get(threadKey))) return;
         if (settlingThreadKeysRef.current.has(threadKey)) return;
         settlingThreadKeysRef.current.add(threadKey);
         try {
@@ -1047,6 +1066,9 @@ export default function SidebarV2() {
   const attemptUnsettle = useCallback(
     (threadRef: ScopedThreadRef) => {
       void (async () => {
+        if (isAgentCreatedTaskThread(threadByKeyRef.current.get(scopedThreadKey(threadRef)))) {
+          return;
+        }
         const result = await unsettleThread(threadRef);
         if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
           const error = squashAtomCommandFailure(result);
@@ -1077,18 +1099,21 @@ export default function SidebarV2() {
       );
       if (threadKeys.length === 0) return;
       const count = threadKeys.length;
+      const hasReadOnlyThread = threadKeys.some((threadKey) =>
+        isAgentCreatedTaskThread(threadByKeyRef.current.get(threadKey)),
+      );
       const clicked = await settlePromise(() =>
         api.contextMenu.show(
-          [
-            { id: "settle", label: `Settle (${count})` },
-            { id: "mark-unread", label: `Mark unread (${count})` },
-            { id: "delete", label: `Delete (${count})`, destructive: true },
-          ],
+          buildSidebarV2MultiSelectThreadContextMenuItems({
+            count,
+            hasReadOnlyThread,
+          }),
           position,
         ),
       );
       if (clicked._tag === "Failure") return;
       if (clicked.value === "settle") {
+        if (hasReadOnlyThread) return;
         // Post-settle navigation must skip threads settling in this same
         // batch — they are all leaving the card block together. Rows that
         // are already explicitly settled are skipped: nothing to do on a
@@ -1111,6 +1136,7 @@ export default function SidebarV2() {
         return;
       }
       if (clicked.value !== "delete") return;
+      if (hasReadOnlyThread) return;
       if (confirmThreadDelete) {
         const confirmed = await settlePromise(() =>
           api.dialogs.confirm(
@@ -1181,38 +1207,36 @@ export default function SidebarV2() {
           serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSettlement ===
           true;
         const isSettled = settledThreadKeysRef.current.has(threadKey);
+        const isReadOnly = isAgentCreatedTaskThread(thread);
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
-            [
-              ...(supportsSettlement
-                ? [
-                    isSettled
-                      ? { id: "unsettle", label: "Un-settle thread" }
-                      : { id: "settle", label: "Settle thread" },
-                  ]
-                : []),
-              { id: "rename", label: "Rename thread" },
-              { id: "mark-unread", label: "Mark unread" },
-              { id: "delete", label: "Delete", destructive: true, icon: "trash" },
-            ],
+            buildSidebarV2ThreadContextMenuItems({
+              readOnly: isReadOnly,
+              supportsSettlement,
+              isSettled,
+            }),
             position,
           ),
         );
         if (clicked._tag === "Failure") return;
         switch (clicked.value) {
           case "settle":
+            if (isReadOnly) return;
             attemptSettle(threadRef);
             return;
           case "unsettle":
+            if (isReadOnly) return;
             attemptUnsettle(threadRef);
             return;
           case "rename":
+            if (isReadOnly) return;
             startThreadRename(threadRef, thread.title);
             return;
           case "mark-unread":
             markThreadUnread(threadKey, thread.latestTurn?.completedAt);
             return;
           case "delete": {
+            if (isReadOnly) return;
             if (confirmThreadDelete) {
               const confirmed = await settlePromise(() =>
                 api.dialogs.confirm(

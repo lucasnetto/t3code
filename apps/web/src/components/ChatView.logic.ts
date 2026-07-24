@@ -20,6 +20,7 @@ import {
   type TerminalContextDraft,
 } from "../lib/terminalContext";
 import type { DraftThreadEnvMode } from "../composerDraftStore";
+export { isAgentCreatedTaskThread, resolveThreadUiReadOnlyReason } from "../lib/threadUiPolicy";
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "t3code:last-invoked-script-by-project";
 export const MAX_HIDDEN_MOUNTED_TERMINAL_THREADS = 10;
@@ -27,10 +28,18 @@ export const MAX_HIDDEN_MOUNTED_PREVIEW_THREADS = 3;
 
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
 
-export function isAgentCreatedTaskThread(
-  thread: Pick<Thread, "taskContext"> | null | undefined,
-): boolean {
-  return thread?.taskContext?.createdBy.kind === "agent";
+const AGENT_THREAD_BLOCKED_EXACT_COMMANDS = new Set([
+  "editor.openFavorite",
+  "modelPicker.toggle",
+  "terminal.close",
+  "terminal.new",
+  "terminal.split",
+  "terminal.splitVertical",
+  "terminal.toggle",
+]);
+
+export function isAgentThreadUiMutationCommand(command: string): boolean {
+  return AGENT_THREAD_BLOCKED_EXACT_COMMANDS.has(command) || command.startsWith("script.");
 }
 
 export function buildLocalDraftThread(

@@ -74,6 +74,7 @@ interface FilePreviewPanelProps {
   availableEditors: ReadonlyArray<EditorId>;
   revealLine: number | null;
   revealRequestId: number;
+  readOnly?: boolean;
   onOpenFile: (relativePath: string) => void;
   onPendingChange: (relativePath: string, pending: boolean) => void;
 }
@@ -599,6 +600,7 @@ function RenderedMarkdownSurface({
   contents,
   threadRef,
   onPendingChange,
+  readOnly = false,
 }: Omit<
   EditableFileSurfaceProps,
   | "resolvedTheme"
@@ -610,6 +612,7 @@ function RenderedMarkdownSurface({
   | "onPostRender"
 > & {
   threadRef: ScopedThreadRef;
+  readOnly?: boolean;
 }) {
   const saveCoordinator = useFileSaveCoordinator({
     environmentId,
@@ -625,15 +628,20 @@ function RenderedMarkdownSurface({
         cwd={cwd}
         threadRef={threadRef}
         className="mx-auto max-w-4xl px-6 py-5"
-        onTaskListChange={({ markerOffset, checked }) => {
-          const currentContents =
-            getOptimisticProjectFileQueryData(environmentId, cwd, relativePath)?.contents ??
-            contents;
-          const nextContents = setMarkdownTaskChecked(currentContents, markerOffset, checked);
-          if (nextContents === currentContents) return;
-          setProjectFileQueryData(environmentId, cwd, relativePath, nextContents);
-          saveCoordinator.change(nextContents);
-        }}
+        externalEditorAvailable={!readOnly}
+        onTaskListChange={
+          readOnly
+            ? undefined
+            : ({ markerOffset, checked }) => {
+                const currentContents =
+                  getOptimisticProjectFileQueryData(environmentId, cwd, relativePath)?.contents ??
+                  contents;
+                const nextContents = setMarkdownTaskChecked(currentContents, markerOffset, checked);
+                if (nextContents === currentContents) return;
+                setProjectFileQueryData(environmentId, cwd, relativePath, nextContents);
+                saveCoordinator.change(nextContents);
+              }
+        }
       />
     </ScrollArea>
   );
@@ -659,6 +667,7 @@ export default function FilePreviewPanel({
   availableEditors,
   revealLine,
   revealRequestId,
+  readOnly = false,
   onOpenFile,
   onPendingChange,
 }: FilePreviewPanelProps) {
@@ -774,7 +783,7 @@ export default function FilePreviewPanel({
               ))}
             </div>
           </ScrollArea>
-          {absolutePath && environmentId === primaryEnvironmentId ? (
+          {!readOnly && absolutePath && environmentId === primaryEnvironmentId ? (
             <OpenInPicker
               environmentId={environmentId}
               keybindings={keybindings}
@@ -887,8 +896,9 @@ export default function FilePreviewPanel({
                 threadRef={threadRef}
                 contents={file.data.contents}
                 onPendingChange={onPendingChange}
+                readOnly={readOnly}
               />
-            ) : file.data.truncated ? (
+            ) : file.data.truncated || readOnly ? (
               <Virtualizer
                 key={`${relativePath}:${diffThemeName}:${file.data.byteLength}`}
                 className="file-preview-virtualizer min-h-0 flex-1 overflow-auto"

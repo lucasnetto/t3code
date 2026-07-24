@@ -133,6 +133,7 @@ interface TimelineRowSharedState {
   resolvedTheme: "light" | "dark";
   diffThemeName: DiffThemeName;
   workspaceRoot: string | undefined;
+  externalEditorAvailable: boolean;
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   activeThreadEnvironmentId: EnvironmentId;
   onRevertUserMessage: (messageId: MessageId) => void;
@@ -179,6 +180,7 @@ interface MessagesTimelineProps {
   diffThemeName: DiffThemeName;
   timestampFormat: TimestampFormat;
   workspaceRoot: string | undefined;
+  externalEditorAvailable?: boolean;
   skills?: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   anchorMessageId: MessageId | null;
   onAnchorReady: (messageId: MessageId, anchorIndex: number) => void;
@@ -214,6 +216,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   diffThemeName,
   timestampFormat,
   workspaceRoot,
+  externalEditorAvailable = true,
   skills = EMPTY_TIMELINE_SKILLS,
   anchorMessageId,
   onAnchorReady,
@@ -427,6 +430,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       resolvedTheme,
       diffThemeName,
       workspaceRoot,
+      externalEditorAvailable,
       skills,
       activeThreadEnvironmentId,
       onRevertUserMessage,
@@ -442,6 +446,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       resolvedTheme,
       diffThemeName,
       workspaceRoot,
+      externalEditorAvailable,
       skills,
       activeThreadEnvironmentId,
       onRevertUserMessage,
@@ -1029,6 +1034,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
           threadRef={ctx.threadRef ?? undefined}
           isStreaming={Boolean(row.message.streaming)}
           skills={ctx.skills}
+          externalEditorAvailable={ctx.externalEditorAvailable}
         />
         <AssistantChangedFilesSection
           turnSummary={row.assistantTurnDiffSummary}
@@ -1558,6 +1564,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
             skills={props.skills}
             className="text-foreground"
             lineBreaks
+            externalEditorAvailable={ctx.externalEditorAvailable}
           />
         ) : null}
         {trailingWhitespace ? <span aria-hidden="true">{trailingWhitespace}</span> : null}
@@ -1580,6 +1587,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
                   skills={props.skills}
                   className="text-foreground"
                   lineBreaks
+                  externalEditorAvailable={ctx.externalEditorAvailable}
                 />
               </div>
             ) : null
@@ -1668,6 +1676,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
           skills={props.skills}
           className="text-foreground"
           lineBreaks
+          externalEditorAvailable={ctx.externalEditorAvailable}
         />,
       );
     } else if (inlinePrefix.length === 0) {
@@ -1693,6 +1702,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
       skills={props.skills}
       className="text-foreground"
       lineBreaks
+      externalEditorAvailable={ctx.externalEditorAvailable}
     />
   );
 });
@@ -1727,6 +1737,7 @@ function UserMessageReviewCommentCard({ comment }: { comment: ReviewCommentConte
           threadRef={ctx.threadRef ?? undefined}
           skills={ctx.skills}
           className="text-foreground"
+          externalEditorAvailable={ctx.externalEditorAvailable}
         />
       )}
       {renderablePatch?.kind === "files" &&

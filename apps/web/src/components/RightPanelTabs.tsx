@@ -47,6 +47,7 @@ interface RightPanelTabsProps {
   browserAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
+  terminalAvailable: boolean;
   children: ReactNode;
 }
 
@@ -94,6 +95,7 @@ function RightPanelEmptyState(props: {
   browserAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
+  terminalAvailable: boolean;
 }) {
   const actions = [
     {
@@ -108,8 +110,8 @@ function RightPanelEmptyState(props: {
       label: "Terminal",
       description: "Start a shell in this workspace.",
       icon: TerminalSquare,
-      available: true,
-      disabledReason: null,
+      available: props.terminalAvailable,
+      disabledReason: "Terminals are unavailable in agent-created task threads.",
       onClick: props.onAddTerminal,
     },
     {
@@ -450,7 +452,11 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     <Globe2 />
                     Browser
                   </SurfaceMenuItem>
-                  <SurfaceMenuItem available onClick={props.onAddTerminal}>
+                  <SurfaceMenuItem
+                    available={props.terminalAvailable}
+                    disabledReason="Terminals are unavailable in agent-created task threads."
+                    onClick={props.onAddTerminal}
+                  >
                     <TerminalSquare />
                     Terminal
                   </SurfaceMenuItem>
@@ -487,6 +493,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             browserAvailable={props.browserAvailable}
             diffAvailable={props.diffAvailable}
             filesAvailable={props.filesAvailable}
+            terminalAvailable={props.terminalAvailable}
           />
         ) : (
           props.children

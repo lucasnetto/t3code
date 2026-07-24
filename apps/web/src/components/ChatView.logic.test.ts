@@ -20,8 +20,10 @@ import {
   getStartedThreadModelChangeBlockReason,
   hasServerAcknowledgedLocalDispatch,
   isAgentCreatedTaskThread,
+  isAgentThreadUiMutationCommand,
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
+  resolveThreadUiReadOnlyReason,
   resolveSendEnvMode,
   shouldWriteThreadErrorToCurrentServerThread,
   threadHasStarted,
@@ -109,6 +111,115 @@ describe("isAgentCreatedTaskThread", () => {
         }),
       ),
     ).toBe(true);
+  });
+});
+
+describe("resolveThreadUiReadOnlyReason", () => {
+  const userTaskThread = makeThread({
+    taskContext: {
+      taskId: TaskId.make("task-1"),
+      createdBy: { kind: "user" },
+    },
+  });
+  const agentTaskThread = makeThread({
+    taskContext: {
+      taskId: TaskId.make("task-1"),
+      createdBy: {
+        kind: "agent",
+        threadId: ThreadId.make("thread-parent"),
+        turnId: TurnId.make("turn-parent"),
+      },
+    },
+  });
+
+  it("keeps resolved standalone and user-created task threads mutable", () => {
+    const standaloneThread = makeThread();
+
+    expect(
+      resolveThreadUiReadOnlyReason({
+        routeKind: "server",
+        thread: standaloneThread,
+        shell: standaloneThread,
+      }),
+    ).toBeNull();
+    expect(
+      resolveThreadUiReadOnlyReason({
+        routeKind: "server",
+        thread: userTaskThread,
+        shell: userTaskThread,
+      }),
+    ).toBeNull();
+  });
+
+  it("makes agent-created task threads read-only from either shell or retained detail lineage", () => {
+    const archivedAgentTaskThread = makeThread({
+      ...agentTaskThread,
+      archivedAt: "2026-03-29T01:00:00.000Z",
+    });
+
+    expect(
+      resolveThreadUiReadOnlyReason({
+        routeKind: "server",
+        thread: makeThread(),
+        shell: agentTaskThread,
+      }),
+    ).toBe("agent-created");
+    expect(
+      resolveThreadUiReadOnlyReason({
+        routeKind: "server",
+        thread: archivedAgentTaskThread,
+        shell: null,
+      }),
+    ).toBe("agent-created");
+  });
+
+  it("fails closed while a direct-navigation detail is waiting for authoritative shell context", () => {
+    expect(
+      resolveThreadUiReadOnlyReason({
+        routeKind: "server",
+        thread: makeThread(),
+        shell: null,
+      }),
+    ).toBe("unresolved-task-context");
+  });
+
+  it("does not apply server task policy to local drafts", () => {
+    expect(
+      resolveThreadUiReadOnlyReason({
+        routeKind: "draft",
+        thread: makeThread(),
+        shell: null,
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("isAgentThreadUiMutationCommand", () => {
+  it.each([
+    "terminal.toggle",
+    "terminal.new",
+    "terminal.split",
+    "terminal.splitVertical",
+    "terminal.close",
+    "modelPicker.toggle",
+    "editor.openFavorite",
+    "script.setup.run",
+    "script.test.run",
+  ])("blocks the %s mutation shortcut", (command) => {
+    expect(isAgentThreadUiMutationCommand(command)).toBe(true);
+  });
+
+  it.each([
+    "diff.toggle",
+    "rightPanel.toggle",
+    "thread.previous",
+    "thread.next",
+    "thread.jump.1",
+    "commandPalette.toggle",
+    "sidebar.toggle",
+    "chat.new",
+  ])("keeps the %s navigation or viewing shortcut available", (command) => {
+    expect(isAgentThreadUiMutationCommand(command)).toBe(false);
   });
 });
 

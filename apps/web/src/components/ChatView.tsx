@@ -203,6 +203,7 @@ import {
   useThreadProject,
   useThreadProposedPlans,
   useThreadRefs,
+  useThreadShell,
 } from "../state/entities";
 import { environmentShell } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
@@ -235,7 +236,8 @@ import {
   createLocalDispatchSnapshot,
   deriveComposerSendState,
   hasServerAcknowledgedLocalDispatch,
-  isAgentCreatedTaskThread,
+  isAgentThreadUiMutationCommand,
+  resolveThreadUiReadOnlyReason,
   getStartedThreadModelChangeBlockReason,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
   LastInvokedScriptByProjectSchema,
@@ -1139,6 +1141,7 @@ function ChatViewContent(props: ChatViewProps) {
   const composerDraftTarget: ScopedThreadRef | DraftId =
     routeKind === "server" ? routeThreadRef : props.draftId;
   const serverThread = useThread(routeThreadRef);
+  const serverThreadShell = useThreadShell(routeThreadRef);
   const markThreadVisited = useUiStateStore((store) => store.markThreadVisited);
   const activeThreadLastVisitedAt = useUiStateStore(
     (store) => store.threadLastVisitedAtById[routeThreadKey],
@@ -1377,6 +1380,15 @@ function ChatViewContent(props: ChatViewProps) {
   // depend on which route is mounted.
   const isServerThread = serverThread !== null;
   const activeThread = isServerThread ? serverThread : localDraftThread;
+  const threadUiReadOnlyReason = resolveThreadUiReadOnlyReason({
+    routeKind,
+    thread: activeThread,
+    shell: serverThreadShell,
+  });
+  // Keep the established local name for the mutation gates introduced by this
+  // PR. It also covers the brief fail-closed interval while task context is
+  // unresolved after a direct navigation or shell removal.
+  const agentCreatedTaskThread = threadUiReadOnlyReason !== null;
   const threadError = isServerThread
     ? (localServerError ?? serverThread?.session?.lastError ?? null)
     : localDraftError;
@@ -1469,6 +1481,19 @@ function ChatViewContent(props: ChatViewProps) {
       .reconcileBrowserSurfaces(activeThreadRef, Object.keys(activePreviewState.sessions));
   }, [activePreviewState.sessions, activeThreadRef]);
 
+  useEffect(() => {
+    if (!agentCreatedTaskThread || !activeThreadRef) return;
+
+    storeSetTerminalOpen(activeThreadRef, false);
+    const state = useRightPanelStore.getState();
+    const threadState = selectThreadRightPanelState(state.byThreadKey, activeThreadRef);
+    for (const surface of threadState.surfaces) {
+      if (surface.kind === "terminal") {
+        state.closeSurface(activeThreadRef, surface.id);
+      }
+    }
+  }, [activeThreadRef, agentCreatedTaskThread, storeSetTerminalOpen]);
+
   const planSidebarOpen = activeRightPanelKind === "plan";
 
   const existingOpenTerminalThreadKeys = useMemo(() => {
@@ -1534,7 +1559,7 @@ function ChatViewContent(props: ChatViewProps) {
     : EMPTY_PENDING_FILE_SURFACE_IDS;
   const handleFilePendingChange = useCallback(
     (relativePath: string, pending: boolean) => {
-      if (!activeProjectKey) return;
+      if (!activeProjectKey || agentCreatedTaskThread) return;
       setPendingFileSurfaceIdsByProject((currentByProject) => {
         const current = currentByProject.get(activeProjectKey) ?? EMPTY_PENDING_FILE_SURFACE_IDS;
         const surfaceId = `file:${relativePath}`;
@@ -1548,7 +1573,7 @@ function ChatViewContent(props: ChatViewProps) {
         return nextByProject;
       });
     },
-    [activeProjectKey],
+    [activeProjectKey, agentCreatedTaskThread],
   );
   const configuredPreviewUrls = useMemo(
     () => getConfiguredPreviewUrls(activeProject?.scripts),
@@ -2426,13 +2451,13 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const setTerminalOpen = useCallback(
     (open: boolean) => {
-      if (!activeThreadRef) return;
+      if (!activeThreadRef || agentCreatedTaskThread) return;
       storeSetTerminalOpen(activeThreadRef, open);
     },
-    [activeThreadRef, storeSetTerminalOpen],
+    [activeThreadRef, agentCreatedTaskThread, storeSetTerminalOpen],
   );
   const toggleTerminalVisibility = useCallback(() => {
-    if (!activeThreadRef) return;
+    if (!activeThreadRef || agentCreatedTaskThread) return;
     const nextOpen = !terminalUiState.terminalOpen;
     if (nextOpen && terminalUiState.terminalIds.length === 0) {
       if (!activeThreadId || !activeProject) {
@@ -2466,6 +2491,7 @@ function ChatViewContent(props: ChatViewProps) {
     activeThreadId,
     activeThreadRef,
     activeThreadWorktreePath,
+    agentCreatedTaskThread,
     environmentId,
     gitCwd,
     openTerminal,
@@ -2480,6 +2506,7 @@ function ChatViewContent(props: ChatViewProps) {
       if (!activeThreadRef || hasReachedSplitLimit || !activeThreadId || !activeProject) {
         return;
       }
+      if (agentCreatedTaskThread) return;
       const cwdForOpen = gitCwd ?? activeProject.workspaceRoot;
       if (!cwdForOpen) {
         return;
@@ -2512,6 +2539,7 @@ function ChatViewContent(props: ChatViewProps) {
       activeThreadRef,
       openTerminal,
       activeThreadWorktreePath,
+      agentCreatedTaskThread,
       environmentId,
       gitCwd,
       hasReachedSplitLimit,
@@ -2520,7 +2548,7 @@ function ChatViewContent(props: ChatViewProps) {
     ],
   );
   const createNewTerminal = useCallback(() => {
-    if (!activeThreadRef || !activeThreadId || !activeProject) {
+    if (!activeThreadRef || !activeThreadId || !activeProject || agentCreatedTaskThread) {
       return;
     }
     const cwdForOpen = gitCwd ?? activeProject.workspaceRoot;
@@ -2550,13 +2578,14 @@ function ChatViewContent(props: ChatViewProps) {
     activeThreadRef,
     openTerminal,
     activeThreadWorktreePath,
+    agentCreatedTaskThread,
     environmentId,
     gitCwd,
     storeNewTerminal,
   ]);
   const closeTerminal = useCallback(
     (terminalId: string) => {
-      if (!activeThreadId || !activeThreadRef) return;
+      if (!activeThreadId || !activeThreadRef || agentCreatedTaskThread) return;
       const fallbackExitWrite = () =>
         writeTerminal({
           environmentId,
@@ -2581,6 +2610,7 @@ function ChatViewContent(props: ChatViewProps) {
     [
       activeThreadId,
       activeThreadRef,
+      agentCreatedTaskThread,
       closeTerminalMutation,
       environmentId,
       storeCloseTerminal,
@@ -2598,7 +2628,7 @@ function ChatViewContent(props: ChatViewProps) {
         rememberAsLastInvoked?: boolean;
       },
     ) => {
-      if (!activeThreadId || !activeProject || !activeThread) return;
+      if (!activeThreadId || !activeProject || !activeThread || agentCreatedTaskThread) return;
       if (options?.rememberAsLastInvoked !== false) {
         setLastInvokedScriptByProjectId((current) => {
           if (current[activeProject.id] === script.id) return current;
@@ -2691,6 +2721,7 @@ function ChatViewContent(props: ChatViewProps) {
       activeThread,
       activeThreadId,
       activeThreadRef,
+      agentCreatedTaskThread,
       gitCwd,
       setTerminalOpen,
       setThreadError,
@@ -2749,7 +2780,7 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const saveProjectScript = useCallback(
     async (input: NewProjectScriptInput): Promise<AtomCommandResult<void, unknown>> => {
-      if (!activeProject) {
+      if (!activeProject || agentCreatedTaskThread) {
         return AsyncResult.success(undefined);
       }
       const nextId = nextProjectScriptId(
@@ -2775,14 +2806,14 @@ function ChatViewContent(props: ChatViewProps) {
         keybindingCommand: commandForProjectScript(nextId),
       });
     },
-    [activeProject, persistProjectScripts],
+    [activeProject, agentCreatedTaskThread, persistProjectScripts],
   );
   const updateProjectScript = useCallback(
     async (
       scriptId: string,
       input: NewProjectScriptInput,
     ): Promise<AtomCommandResult<void, unknown>> => {
-      if (!activeProject) {
+      if (!activeProject || agentCreatedTaskThread) {
         return AsyncResult.success(undefined);
       }
       const existingScript = activeProject.scripts.find((script) => script.id === scriptId);
@@ -2808,11 +2839,11 @@ function ChatViewContent(props: ChatViewProps) {
         keybindingCommand: commandForProjectScript(scriptId),
       });
     },
-    [activeProject, persistProjectScripts],
+    [activeProject, agentCreatedTaskThread, persistProjectScripts],
   );
   const deleteProjectScript = useCallback(
     async (scriptId: string): Promise<AtomCommandResult<void, unknown>> => {
-      if (!activeProject) {
+      if (!activeProject || agentCreatedTaskThread) {
         return AsyncResult.success(undefined);
       }
       const nextScripts = activeProject.scripts.filter((script) => script.id !== scriptId);
@@ -2844,7 +2875,7 @@ function ChatViewContent(props: ChatViewProps) {
       }
       return result;
     },
-    [activeProject, persistProjectScripts],
+    [activeProject, agentCreatedTaskThread, persistProjectScripts],
   );
 
   const handleRuntimeModeChange = useCallback(
@@ -2956,7 +2987,7 @@ function ChatViewContent(props: ChatViewProps) {
     }
   }, [activeThreadRef]);
   const addTerminalSurface = useCallback(() => {
-    if (!activeThreadRef || !activeThreadId || !activeProject) return;
+    if (!activeThreadRef || !activeThreadId || !activeProject || agentCreatedTaskThread) return;
     const cwd = gitCwd ?? activeProject.workspaceRoot;
     const terminalId = nextTerminalId([...activeKnownTerminalIds, ...panelTerminalIds]);
     useRightPanelStore.getState().openTerminal(activeThreadRef, terminalId);
@@ -2980,6 +3011,7 @@ function ChatViewContent(props: ChatViewProps) {
     activeThreadId,
     activeThreadRef,
     activeThreadWorktreePath,
+    agentCreatedTaskThread,
     gitCwd,
     openTerminal,
     panelTerminalIds,
@@ -2990,6 +3022,7 @@ function ChatViewContent(props: ChatViewProps) {
         !activeThreadRef ||
         !activeThreadId ||
         !activeProject ||
+        agentCreatedTaskThread ||
         activeRightPanelSurface?.kind !== "terminal" ||
         activeRightPanelSurface.terminalIds.length >= MAX_TERMINALS_PER_GROUP
       ) {
@@ -3022,6 +3055,7 @@ function ChatViewContent(props: ChatViewProps) {
       activeThreadId,
       activeThreadRef,
       activeThreadWorktreePath,
+      agentCreatedTaskThread,
       gitCwd,
       openTerminal,
       panelTerminalIds,
@@ -3032,17 +3066,29 @@ function ChatViewContent(props: ChatViewProps) {
   }, [splitPanelTerminal]);
   const activatePanelTerminal = useCallback(
     (terminalId: string) => {
-      if (!activeThreadRef || activeRightPanelSurface?.kind !== "terminal") return;
+      if (
+        !activeThreadRef ||
+        agentCreatedTaskThread ||
+        activeRightPanelSurface?.kind !== "terminal"
+      ) {
+        return;
+      }
       useRightPanelStore
         .getState()
         .activateTerminal(activeThreadRef, activeRightPanelSurface.id, terminalId);
       setTerminalFocusRequestId((value) => value + 1);
     },
-    [activeRightPanelSurface, activeThreadRef],
+    [activeRightPanelSurface, activeThreadRef, agentCreatedTaskThread],
   );
   const closePanelTerminal = useCallback(
     (terminalId: string) => {
-      if (!activeThreadRef || activeRightPanelSurface?.kind !== "terminal") return;
+      if (
+        !activeThreadRef ||
+        agentCreatedTaskThread ||
+        activeRightPanelSurface?.kind !== "terminal"
+      ) {
+        return;
+      }
       void closeTerminalMutation({
         environmentId: activeThreadRef.environmentId,
         input: { threadId: activeThreadRef.threadId, terminalId, deleteHistory: true },
@@ -3053,7 +3099,13 @@ function ChatViewContent(props: ChatViewProps) {
         .closeTerminal(activeThreadRef, activeRightPanelSurface.id, terminalId);
       setTerminalFocusRequestId((value) => value + 1);
     },
-    [activeRightPanelSurface, activeThreadRef, closeTerminalMutation, storeCloseTerminal],
+    [
+      activeRightPanelSurface,
+      activeThreadRef,
+      agentCreatedTaskThread,
+      closeTerminalMutation,
+      storeCloseTerminal,
+    ],
   );
   const activateRightPanelSurface = useCallback(
     (surface: RightPanelSurface) => {
@@ -3854,6 +3906,12 @@ function ChatViewContent(props: ChatViewProps) {
       });
       if (!command) return;
 
+      if (agentCreatedTaskThread && isAgentThreadUiMutationCommand(command)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+
       if (command === "terminal.toggle") {
         event.preventDefault();
         event.stopPropagation();
@@ -3949,6 +4007,7 @@ function ChatViewContent(props: ChatViewProps) {
   }, [
     activeProject,
     activeRightPanelSurface,
+    agentCreatedTaskThread,
     addTerminalSurface,
     terminalUiState.terminalOpen,
     terminalUiState.activeTerminalId,
@@ -5091,8 +5150,6 @@ function ChatViewContent(props: ChatViewProps) {
   if (!activeThread) {
     return <NoActiveThreadState />;
   }
-  const agentCreatedTaskThread = isAgentCreatedTaskThread(activeThread);
-
   const panelToggleControls = (
     <PanelLayoutControls
       terminalAvailable={activeProject !== null && !agentCreatedTaskThread}
@@ -5186,6 +5243,7 @@ function ChatViewContent(props: ChatViewProps) {
           revealRequestId={activeFileSurface?.revealRequestId ?? 0}
           onOpenFile={openFileSurface}
           onPendingChange={handleFilePendingChange}
+          readOnly={agentCreatedTaskThread}
         />
       </Suspense>
     ) : null
@@ -5285,6 +5343,7 @@ function ChatViewContent(props: ChatViewProps) {
                 diffThemeName={diffThemeName}
                 timestampFormat={timestampFormat}
                 workspaceRoot={activeWorkspaceRoot}
+                externalEditorAvailable={!agentCreatedTaskThread}
                 skills={activeProviderStatus?.skills ?? EMPTY_PROVIDER_SKILLS}
                 anchorMessageId={timelineAnchorMessageId}
                 onAnchorReady={onTimelineAnchorReady}
@@ -5324,9 +5383,15 @@ function ChatViewContent(props: ChatViewProps) {
                 <div className="pointer-events-auto mx-auto flex max-w-3xl items-center gap-3 rounded-xl border border-border bg-card/95 px-3 py-2.5 shadow-lg backdrop-blur">
                   <BotIcon className="size-4 shrink-0 text-muted-foreground" />
                   <div className="min-w-0 flex-1">
-                    <p className="text-xs font-medium">Agent-created task thread</p>
+                    <p className="text-xs font-medium">
+                      {threadUiReadOnlyReason === "agent-created"
+                        ? "Agent-created task thread"
+                        : "Verifying thread context"}
+                    </p>
                     <p className="truncate text-[11px] text-muted-foreground">
-                      Read-only history. Coordinate follow-ups from a user-created task thread.
+                      {threadUiReadOnlyReason === "agent-created"
+                        ? "Read-only history. Coordinate follow-ups from a user-created task thread."
+                        : "Mutation controls will return after this thread's task context is verified."}
                     </p>
                   </div>
                   {isWorking ? (
@@ -5587,6 +5652,7 @@ function ChatViewContent(props: ChatViewProps) {
           browserAvailable={isPreviewSupportedInRuntime()}
           diffAvailable={isServerThread && isGitRepo}
           filesAvailable={activeProject !== null}
+          terminalAvailable={!agentCreatedTaskThread}
         >
           {rightPanelContent}
         </RightPanelTabs>
@@ -5614,6 +5680,7 @@ function ChatViewContent(props: ChatViewProps) {
             browserAvailable={isPreviewSupportedInRuntime()}
             diffAvailable={isServerThread && isGitRepo}
             filesAvailable={activeProject !== null}
+            terminalAvailable={!agentCreatedTaskThread}
           >
             {rightPanelContent}
           </RightPanelTabs>
