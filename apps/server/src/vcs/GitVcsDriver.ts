@@ -136,6 +136,30 @@ export interface GitRenameBranchResult {
   branch: string;
 }
 
+export interface GitCreatedBranch {
+  readonly refName: string;
+  readonly commitSha: string;
+}
+
+export interface GitCreateWorktreeResult extends VcsCreateWorktreeResult {
+  /**
+   * Present only when `createWorktree` successfully created `newRefName`.
+   * Bootstrap compensation uses this as proof of the exact branch state T3
+   * created; callers must not synthesize it for pre-existing branches.
+   */
+  readonly createdBranch?: GitCreatedBranch;
+}
+
+export interface GitCleanupCreatedWorktreeInput {
+  readonly cwd: string;
+  readonly path: string;
+  readonly createdBranch: GitCreatedBranch;
+}
+
+export type GitCleanupCreatedWorktreeResult =
+  | { readonly branch: "deleted" | "absent" }
+  | { readonly branch: "retained"; readonly reason: string };
+
 export interface GitFetchPullRequestBranchInput {
   cwd: string;
   prNumber: number;
@@ -231,7 +255,10 @@ export class GitVcsDriver extends Context.Service<
     readonly pullCurrentBranch: (cwd: string) => Effect.Effect<VcsPullResult, GitCommandError>;
     readonly createWorktree: (
       input: VcsCreateWorktreeInput,
-    ) => Effect.Effect<VcsCreateWorktreeResult, GitCommandError>;
+    ) => Effect.Effect<GitCreateWorktreeResult, GitCommandError>;
+    readonly cleanupCreatedWorktree: (
+      input: GitCleanupCreatedWorktreeInput,
+    ) => Effect.Effect<GitCleanupCreatedWorktreeResult, GitCommandError>;
     readonly fetchPullRequestBranch: (
       input: GitFetchPullRequestBranchInput,
     ) => Effect.Effect<void, GitCommandError>;

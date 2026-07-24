@@ -688,6 +688,142 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         assert.equal(yield* fileSystem.exists(worktreePath), false);
       }),
     );
+
+    it.effect("removes a newly added worktree when branch configuration fails", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const worktreePath = pathService.join(
+          yield* makeTmpDir("git-worktrees-config-failure-"),
+          "feature-worktree",
+        );
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        // `worktree add` does not need the repository config lock, while the
+        // subsequent gh-merge-base write does. This deterministically injects
+        // a failure after Git has registered the new worktree.
+        yield* writeTextFile(cwd, ".git/config.lock", "");
+
+        const error = yield* driver
+          .createWorktree({
+            cwd,
+            path: worktreePath,
+            refName: initialBranch,
+            newRefName: "feature/config-failure",
+            baseRefName: initialBranch,
+          })
+          .pipe(Effect.flip);
+
+        assert.deepInclude(error, {
+          _tag: "GitCommandError",
+          operation: "GitVcsDriver.createWorktree.configureBaseRef",
+          cwd,
+        });
+        assert.notInclude(error.detail, "Cleanup also failed");
+
+        const registeredWorktrees = yield* git(cwd, ["worktree", "list", "--porcelain"]);
+        assert.notInclude(registeredWorktrees, worktreePath);
+        const fileSystem = yield* FileSystem.FileSystem;
+        assert.equal(yield* fileSystem.exists(worktreePath), false);
+        assert.equal(
+          yield* git(cwd, ["branch", "--list", "feature/config-failure"]),
+          "",
+          "configuration compensation should remove the branch created by worktree add",
+        );
+
+        yield* fileSystem.remove(pathService.join(cwd, ".git/config.lock"));
+        const retried = yield* driver.createWorktree({
+          cwd,
+          path: worktreePath,
+          refName: initialBranch,
+          newRefName: "feature/config-failure",
+          baseRefName: initialBranch,
+        });
+        assert.equal(retried.createdBranch?.refName, "feature/config-failure");
+        assert.equal(
+          yield* git(worktreePath, ["branch", "--show-current"]),
+          "feature/config-failure",
+        );
+      }),
+    );
+
+    it.effect("retains a created branch that moved after worktree creation", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const worktreePath = pathService.join(
+          yield* makeTmpDir("git-worktrees-moved-branch-"),
+          "feature-worktree",
+        );
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const created = yield* driver.createWorktree({
+          cwd,
+          path: worktreePath,
+          refName: initialBranch,
+          newRefName: "feature/moved-before-cleanup",
+        });
+        assert.isDefined(created.createdBranch);
+        if (!created.createdBranch) {
+          return;
+        }
+
+        yield* writeTextFile(worktreePath, "moved.txt", "branch moved\n");
+        yield* git(worktreePath, ["add", "moved.txt"]);
+        yield* git(worktreePath, ["commit", "-m", "move created branch"]);
+        const movedCommit = yield* git(worktreePath, ["rev-parse", "HEAD"]);
+
+        const cleanup = yield* driver.cleanupCreatedWorktree({
+          cwd,
+          path: worktreePath,
+          createdBranch: created.createdBranch,
+        });
+
+        assert.deepEqual(cleanup, {
+          branch: "retained",
+          reason: `branch moved from created commit ${created.createdBranch.commitSha} to ${movedCommit}`,
+        });
+        const fileSystem = yield* FileSystem.FileSystem;
+        assert.equal(yield* fileSystem.exists(worktreePath), false);
+        assert.equal(
+          yield* git(cwd, ["rev-parse", "refs/heads/feature/moved-before-cleanup"]),
+          movedCommit,
+        );
+      }),
+    );
+
+    it.effect("never cleans up a pre-existing branch when worktree creation is rejected", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const worktreePath = pathService.join(
+          yield* makeTmpDir("git-worktrees-pre-existing-branch-"),
+          "feature-worktree",
+        );
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* git(cwd, ["branch", "feature/pre-existing", initialBranch]);
+        const originalCommit = yield* git(cwd, ["rev-parse", "refs/heads/feature/pre-existing"]);
+
+        const error = yield* driver
+          .createWorktree({
+            cwd,
+            path: worktreePath,
+            refName: initialBranch,
+            newRefName: "feature/pre-existing",
+          })
+          .pipe(Effect.flip);
+
+        assert.equal(error._tag, "GitCommandError");
+        assert.equal(
+          yield* git(cwd, ["rev-parse", "refs/heads/feature/pre-existing"]),
+          originalCommit,
+        );
+        const fileSystem = yield* FileSystem.FileSystem;
+        assert.equal(yield* fileSystem.exists(worktreePath), false);
+      }),
+    );
   });
 
   describe("remote operations", () => {

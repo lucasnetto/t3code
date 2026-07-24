@@ -5,6 +5,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -406,6 +407,7 @@ const makeWsRpcLayer = (
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
       const crypto = yield* Crypto.Crypto;
+      const path = yield* Path.Path;
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
       const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
@@ -882,11 +884,13 @@ const makeWsRpcLayer = (
         Effect.gen(function* () {
           const bootstrap = command.bootstrap;
           const { bootstrap: _bootstrap, ...finalTurnStartCommand } = command;
+          const taskId = bootstrap?.createThread?.taskId;
           let createdThread = false;
           let targetProjectId = bootstrap?.createThread?.projectId;
           let targetProjectCwd = bootstrap?.prepareWorktree?.projectCwd;
           let targetWorktreePath = bootstrap?.createThread?.worktreePath ?? null;
           let createdWorktreePath: string | null = null;
+          let createdBranch: GitVcsDriver.GitCreatedBranch | null = null;
 
           const loadTaskWorkspaceContext = (taskId: TaskId) =>
             projectionSnapshotQuery.getShellSnapshot().pipe(
@@ -929,19 +933,99 @@ const makeWsRpcLayer = (
                       threadId: command.threadId,
                     }),
                   ),
-                  Effect.ignoreCause({ log: true }),
+                  Effect.as(true),
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning(
+                      "bootstrap thread cleanup failed; retaining thread as durable owner",
+                      {
+                        threadId: command.threadId,
+                        cause: Cause.pretty(cause),
+                        recovery:
+                          "Delete or retry the retained thread after resolving the failure.",
+                      },
+                    ).pipe(Effect.as(false)),
+                  ),
                 )
-              : Effect.void;
+              : Effect.succeed(false);
 
-          const cleanupCreatedWorktree = () =>
-            createdWorktreePath && targetProjectCwd
-              ? gitWorkflow
-                  .removeWorktree({
-                    cwd: targetProjectCwd,
-                    path: createdWorktreePath,
-                  })
-                  .pipe(Effect.ignoreCause({ log: true }))
-              : Effect.void;
+          const cleanupCreatedWorktree = (): Effect.Effect<boolean> => {
+            if (!createdWorktreePath || !targetProjectCwd) {
+              return Effect.succeed(true);
+            }
+            const worktreePath = createdWorktreePath;
+            const projectCwd = targetProjectCwd;
+            if (!createdBranch) {
+              return Effect.logWarning(
+                "bootstrap worktree cleanup skipped branch deletion because creation proof is missing",
+                {
+                  threadId: command.threadId,
+                  projectCwd,
+                  worktreePath,
+                  recovery: "Remove the retained local branch manually if it was created by T3.",
+                },
+              ).pipe(
+                Effect.andThen(
+                  gitWorkflow.removeWorktree({
+                    cwd: projectCwd,
+                    path: worktreePath,
+                  }),
+                ),
+                Effect.as(true),
+                Effect.catchCause((cause) =>
+                  Effect.logWarning(
+                    "bootstrap worktree cleanup failed; retaining thread as durable owner",
+                    {
+                      threadId: command.threadId,
+                      projectCwd,
+                      worktreePath,
+                      cause: Cause.pretty(cause),
+                      recovery:
+                        "Resolve or remove the retained worktree, then delete or retry the owning thread.",
+                    },
+                  ).pipe(Effect.as(false)),
+                ),
+              );
+            }
+            const branchToCleanup = createdBranch;
+            return gitWorkflow
+              .cleanupCreatedWorktree({
+                cwd: projectCwd,
+                path: worktreePath,
+                createdBranch: branchToCleanup,
+              })
+              .pipe(
+                Effect.tap((cleanup) =>
+                  cleanup.branch === "retained"
+                    ? Effect.logWarning(
+                        "bootstrap worktree removed but created branch was retained",
+                        {
+                          threadId: command.threadId,
+                          projectCwd,
+                          worktreePath,
+                          branch: branchToCleanup.refName,
+                          reason: cleanup.reason,
+                          recovery:
+                            "Inspect the retained branch before deleting it or retrying with the same branch name.",
+                        },
+                      )
+                    : Effect.void,
+                ),
+                Effect.as(true),
+                Effect.catchCause((cause) =>
+                  Effect.logWarning(
+                    "bootstrap worktree cleanup failed; retaining thread as durable owner",
+                    {
+                      threadId: command.threadId,
+                      projectCwd,
+                      worktreePath,
+                      cause: Cause.pretty(cause),
+                      recovery:
+                        "Resolve or remove the retained worktree, then delete or retry the owning thread.",
+                    },
+                  ).pipe(Effect.as(false)),
+                ),
+              );
+          };
 
           const recordSetupScriptLaunchFailure = (input: {
             readonly error: ProjectSetupScriptRunner.ProjectSetupScriptRunnerError;
@@ -1059,8 +1143,53 @@ const makeWsRpcLayer = (
             });
 
           const bootstrapProgram = Effect.gen(function* () {
-            const taskId = bootstrap?.createThread?.taskId;
             const taskContext = taskId ? yield* loadTaskWorkspaceContext(taskId) : null;
+
+            if (taskContext && bootstrap?.createThread && bootstrap.prepareWorktree) {
+              const projectId = bootstrap.createThread.projectId;
+              if (!taskContext.task.approvedProjectIds.includes(projectId)) {
+                return yield* new OrchestrationDispatchCommandError({
+                  message: `Project ${projectId} is not approved for task ${taskContext.task.id}.`,
+                  cause: {
+                    taskId: taskContext.task.id,
+                    projectId,
+                  },
+                });
+              }
+              const project = taskContext.projects.find((candidate) => candidate.id === projectId);
+              if (!project) {
+                return yield* new OrchestrationDispatchCommandError({
+                  message: `Approved project ${projectId} is not active while preparing task ${taskContext.task.id}.`,
+                  cause: {
+                    taskId: taskContext.task.id,
+                    projectId,
+                  },
+                });
+              }
+              if (project.visibility === "internal-task") {
+                return yield* new OrchestrationDispatchCommandError({
+                  message: `Task workspace project ${projectId} cannot be used as a repository worktree source.`,
+                  cause: {
+                    taskId: taskContext.task.id,
+                    projectId,
+                  },
+                });
+              }
+              const projectedCwd = path.resolve(project.workspaceRoot.trim());
+              const compatibilityCwd = path.resolve(bootstrap.prepareWorktree.projectCwd.trim());
+              if (compatibilityCwd !== projectedCwd) {
+                return yield* new OrchestrationDispatchCommandError({
+                  message: `Repository workspace for project ${projectId} does not match the approved project projection.`,
+                  cause: {
+                    taskId: taskContext.task.id,
+                    projectId,
+                    projectedCwd,
+                    providedCwd: compatibilityCwd,
+                  },
+                });
+              }
+              targetProjectCwd = project.workspaceRoot;
+            }
 
             if (taskContext) {
               yield* taskWorkspace
@@ -1091,14 +1220,15 @@ const makeWsRpcLayer = (
             }
 
             if (bootstrap?.prepareWorktree) {
+              const projectCwd = targetProjectCwd ?? bootstrap.prepareWorktree.projectCwd;
               let worktreeBaseRef = bootstrap.prepareWorktree.baseBranch;
               if (bootstrap.prepareWorktree.startFromOrigin) {
                 yield* gitWorkflow.fetchRemote({
-                  cwd: bootstrap.prepareWorktree.projectCwd,
+                  cwd: projectCwd,
                   remoteName: "origin",
                 });
                 const resolvedRemoteBase = yield* gitWorkflow.resolveRemoteTrackingCommit({
-                  cwd: bootstrap.prepareWorktree.projectCwd,
+                  cwd: projectCwd,
                   refName: bootstrap.prepareWorktree.baseBranch,
                   fallbackRemoteName: "origin",
                 });
@@ -1116,7 +1246,7 @@ const makeWsRpcLayer = (
                   })
                 : null;
               const worktree = yield* gitWorkflow.createWorktree({
-                cwd: bootstrap.prepareWorktree.projectCwd,
+                cwd: projectCwd,
                 refName: worktreeBaseRef,
                 newRefName: bootstrap.prepareWorktree.branch,
                 baseRefName: bootstrap.prepareWorktree.baseBranch,
@@ -1124,6 +1254,7 @@ const makeWsRpcLayer = (
               });
               targetWorktreePath = worktree.worktree.path;
               createdWorktreePath = targetWorktreePath;
+              createdBranch = worktree.createdBranch ?? null;
               yield* orchestrationEngine.dispatch({
                 type: "thread.meta.update",
                 commandId: yield* serverCommandId("bootstrap-thread-meta-update"),
@@ -1146,12 +1277,39 @@ const makeWsRpcLayer = (
           return yield* bootstrapProgram.pipe(
             Effect.catchCause((cause) => {
               const dispatchError = toBootstrapDispatchCommandCauseError(cause);
-              if (Cause.hasInterruptsOnly(cause)) {
-                return Effect.fail(dispatchError);
-              }
-              return cleanupCreatedWorktree().pipe(
-                Effect.andThen(cleanupCreatedThread()),
-                Effect.flatMap(() => Effect.fail(dispatchError)),
+              return Effect.uninterruptible(
+                cleanupCreatedWorktree().pipe(
+                  Effect.flatMap((worktreeRemoved) =>
+                    (worktreeRemoved ? cleanupCreatedThread() : Effect.succeed(false)).pipe(
+                      Effect.map((threadDeleted) => ({
+                        worktreeRemoved,
+                        threadDeleted,
+                      })),
+                    ),
+                  ),
+                  Effect.flatMap((cleanup) =>
+                    createdThread && taskId
+                      ? refreshTaskWorkspace(taskId).pipe(
+                          Effect.catchCause((refreshCause) =>
+                            Effect.logWarning(
+                              "bootstrap compensation failed to refresh task workspace context",
+                              {
+                                taskId,
+                                threadId: command.threadId,
+                                threadDeleted: cleanup.threadDeleted,
+                                worktreeRemoved: cleanup.worktreeRemoved,
+                                bootstrapError: dispatchError.message,
+                                cause: Cause.pretty(refreshCause),
+                                recovery:
+                                  "Retry task workspace preparation after resolving the reported failure.",
+                              },
+                            ),
+                          ),
+                        )
+                      : Effect.void,
+                  ),
+                  Effect.andThen(Effect.fail(dispatchError)),
+                ),
               );
             }),
           );

@@ -10,7 +10,6 @@ import {
   type VcsCreateRefInput,
   type VcsCreateRefResult,
   type VcsCreateWorktreeInput,
-  type VcsCreateWorktreeResult,
   type VcsListRefsInput,
   type VcsListRefsResult,
   type GitManagerServiceError,
@@ -64,7 +63,10 @@ export class GitWorkflowService extends Context.Service<
     ) => Effect.Effect<VcsListRefsResult, GitCommandError>;
     readonly createWorktree: (
       input: VcsCreateWorktreeInput,
-    ) => Effect.Effect<VcsCreateWorktreeResult, GitCommandError>;
+    ) => Effect.Effect<GitVcsDriver.GitCreateWorktreeResult, GitCommandError>;
+    readonly cleanupCreatedWorktree: (
+      input: GitVcsDriver.GitCleanupCreatedWorktreeInput,
+    ) => Effect.Effect<GitVcsDriver.GitCleanupCreatedWorktreeResult, GitCommandError>;
     readonly fetchRemote: (input: {
       readonly cwd: string;
       readonly remoteName: string;
@@ -298,6 +300,10 @@ export const make = Effect.gen(function* () {
     createWorktree: (input) =>
       ensureGitCommand("GitWorkflowService.createWorktree", input.cwd).pipe(
         Effect.andThen(git.createWorktree(input)),
+      ),
+    cleanupCreatedWorktree: (input) =>
+      ensureGitCommand("GitWorkflowService.cleanupCreatedWorktree", input.cwd).pipe(
+        Effect.andThen(git.cleanupCreatedWorktree(input)),
       ),
     fetchRemote: (input) =>
       ensureGitCommand("GitWorkflowService.fetchRemote", input.cwd).pipe(
