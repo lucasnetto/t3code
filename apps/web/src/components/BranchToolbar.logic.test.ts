@@ -11,6 +11,7 @@ import {
   resolveEnvModeLabel,
   resolveBranchToolbarValue,
   resolveLockedWorkspaceLabel,
+  shouldEnableEnvironmentPicker,
   shouldIncludeBranchPickerItem,
   shouldShowEnvironmentIndicator,
 } from "./BranchToolbar.logic";
@@ -158,6 +159,28 @@ describe("shouldShowEnvironmentIndicator", () => {
   });
 });
 
+describe("shouldEnableEnvironmentPicker", () => {
+  it("keeps the picker available for ordinary drafts spanning environments", () => {
+    expect(
+      shouldEnableEnvironmentPicker({
+        environmentCount: 2,
+        hasEnvironmentChangeHandler: true,
+        environmentLocked: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("renders a task repository environment as a static indicator", () => {
+    expect(
+      shouldEnableEnvironmentPicker({
+        environmentCount: 2,
+        hasEnvironmentChangeHandler: true,
+        environmentLocked: true,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("resolveEffectiveEnvMode", () => {
   it("treats draft threads already attached to a worktree as current-checkout mode", () => {
     expect(
@@ -204,6 +227,10 @@ describe("resolveLockedWorkspaceLabel", () => {
 
   it("uses a shorter label for an attached worktree", () => {
     expect(resolveLockedWorkspaceLabel("/repo/.t3/worktrees/feature-a")).toBe("Worktree");
+  });
+
+  it("labels a pending locked managed worktree without suggesting a shared checkout", () => {
+    expect(resolveLockedWorkspaceLabel(null, "worktree")).toBe("New worktree");
   });
 });
 

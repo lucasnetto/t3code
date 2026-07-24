@@ -7,11 +7,18 @@ import {
   type ScopedProjectRef,
   type ServerProvider,
   type ScopedThreadRef,
+  type TaskId,
   type ThreadId,
   type TurnId,
 } from "@t3tools/contracts";
 import { type ChatMessage, type SessionPhase, type Thread } from "../types";
-import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
+import {
+  type ComposerImageAttachment,
+  type DraftThreadState,
+  isRepositoryBoundTaskDraft,
+  resolveTaskDraftProjectRef,
+} from "../composerDraftStore";
+import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import * as Schema from "effect/Schema";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentThreadDetails } from "../state/threads";
@@ -270,6 +277,90 @@ export function resolveSendEnvMode(input: {
   isGitRepo: boolean;
 }): DraftThreadEnvMode {
   return input.isGitRepo ? input.requestedEnvMode : "local";
+}
+
+export function enforceTaskDraftEnvMode(input: {
+  requestedEnvMode: DraftThreadEnvMode;
+  isTaskRepositoryDraft: boolean;
+}): DraftThreadEnvMode {
+  return input.isTaskRepositoryDraft ? "worktree" : input.requestedEnvMode;
+}
+
+export function canChangeDraftEnvironment(input: {
+  hasDraftId: boolean;
+  environmentLocked: boolean;
+  isTaskRepositoryDraft: boolean;
+}): boolean {
+  return input.hasDraftId && !input.environmentLocked && !input.isTaskRepositoryDraft;
+}
+
+export function resolveDraftSendProjectRef(input: {
+  draftThread: DraftThreadState | undefined;
+  environmentId: EnvironmentId;
+  projectId: ProjectId;
+}) {
+  return resolveTaskDraftProjectRef(
+    scopeProjectRef(input.environmentId, input.projectId),
+    input.draftThread?.taskDraft,
+  );
+}
+
+export function durableThreadMatchesTaskRepositoryDraft(
+  draftThread: DraftThreadState,
+  durableThread: {
+    projectId: ProjectId;
+    createdAt: string;
+    archivedAt: string | null;
+    taskContext?: {
+      taskId: TaskId;
+      createdBy: { kind: "user" | "agent" };
+    };
+  } | null,
+): boolean {
+  const taskDraft = draftThread.taskDraft;
+  return Boolean(
+    durableThread &&
+    isRepositoryBoundTaskDraft(taskDraft) &&
+    durableThread.projectId === draftThread.projectId &&
+    durableThread.createdAt === draftThread.createdAt &&
+    durableThread.archivedAt === null &&
+    durableThread.taskContext !== undefined &&
+    durableThread.taskContext.taskId === taskDraft?.taskId &&
+    durableThread.taskContext.createdBy.kind === "user",
+  );
+}
+
+export function shouldIncludeDraftThreadBootstrap(input: {
+  isLocalDraftThread: boolean;
+  hasTaskDraft: boolean;
+  isFirstMessage: boolean;
+}): boolean {
+  return input.isLocalDraftThread || (input.hasTaskDraft && input.isFirstMessage);
+}
+
+export function buildDraftWorktreeBootstrap(input: {
+  projectCwd: string;
+  baseBranch: string;
+  branch: string;
+  startFromOrigin: boolean;
+}): {
+  prepareWorktree: {
+    projectCwd: string;
+    baseBranch: string;
+    branch: string;
+    startFromOrigin?: true;
+  };
+  runSetupScript: true;
+} {
+  return {
+    prepareWorktree: {
+      projectCwd: input.projectCwd,
+      baseBranch: input.baseBranch,
+      branch: input.branch,
+      ...(input.startFromOrigin ? { startFromOrigin: true as const } : {}),
+    },
+    runSetupScript: true,
+  };
 }
 
 export function cloneComposerImageForRetry(

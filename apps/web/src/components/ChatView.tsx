@@ -175,6 +175,7 @@ import {
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
   reconcileTaskDraftRepositories,
+  isRepositoryBoundTaskDraft,
   useComposerDraftStore,
   type DraftId,
 } from "../composerDraftStore";
@@ -207,6 +208,7 @@ import { threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
+  readThreadShell,
   useProject,
   useProjects,
   useTask,
@@ -240,13 +242,16 @@ import {
 } from "./chat/draftHeroTransition";
 import {
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
+  buildDraftWorktreeBootstrap,
   buildExpiredTerminalContextToastCopy,
+  canChangeDraftEnvironment,
   buildLocalDraftThread,
   buildThreadTurnInterruptInput,
   collectUserMessageBlobPreviewUrls,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
   deriveRepositoryUiContext,
+  durableThreadMatchesTaskRepositoryDraft,
   hasServerAcknowledgedLocalDispatch,
   isAgentThreadUiMutationCommand,
   resolveThreadUiReadOnlyReason,
@@ -257,12 +262,15 @@ import {
   PullRequestDialogState,
   cloneComposerImageForRetry,
   deriveLockedProvider,
+  enforceTaskDraftEnvMode,
   readFileAsDataUrl,
   reconcileMountedTerminalThreadIds,
+  resolveDraftSendProjectRef,
   resolveSendEnvMode,
   taskDraftRepositorySendBlockReason,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
+  shouldIncludeDraftThreadBootstrap,
   waitForStartedServerThread,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
@@ -1199,6 +1207,9 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const clearComposerDraftContent = useComposerDraftStore((store) => store.clearComposerContent);
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
+  const recoverTaskRepositoryDraftFirstSendFailure = useComposerDraftStore(
+    (store) => store.recoverTaskRepositoryDraftFirstSendFailure,
+  );
   const getDraftSessionByLogicalProjectKey = useComposerDraftStore(
     (store) => store.getDraftSessionByLogicalProjectKey,
   );
@@ -1411,13 +1422,34 @@ function ChatViewContent(props: ChatViewProps) {
   const interactionMode =
     composerInteractionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
-  const isTaskDraft = isLocalDraftThread && draftThread?.taskDraft !== undefined;
+  const isTaskDraft = draftThread?.taskDraft !== undefined;
   const taskDraftTargetProjectId =
     draftThread?.taskDraft?.targetProjectId ?? draftThread?.taskDraft?.workspaceProjectId;
-  const isTaskRepositoryDraft =
-    isTaskDraft &&
-    taskDraftTargetProjectId !== undefined &&
-    taskDraftTargetProjectId !== draftThread?.taskDraft?.workspaceProjectId;
+  const isTaskRepositoryDraft = isTaskDraft && isRepositoryBoundTaskDraft(draftThread?.taskDraft);
+  useEffect(() => {
+    if (
+      !isTaskRepositoryDraft ||
+      !draftId ||
+      !draftThread?.firstSendFailed ||
+      durableThreadMatchesTaskRepositoryDraft(
+        draftThread,
+        readThreadShell(scopeThreadRef(draftThread.environmentId, draftThread.threadId)),
+      )
+    ) {
+      return;
+    }
+    recoverTaskRepositoryDraftFirstSendFailure(draftId, {
+      failedThreadId: draftThread.threadId,
+      durableThreadMatches: false,
+      replacementThreadId: newThreadId(),
+    });
+  }, [
+    draftId,
+    draftThread,
+    isTaskRepositoryDraft,
+    recoverTaskRepositoryDraftFirstSendFailure,
+    serverThread,
+  ]);
   const activeTaskRef =
     activeThread?.taskContext === undefined
       ? null
@@ -2547,7 +2579,16 @@ function ChatViewContent(props: ChatViewProps) {
   // project in that environment while keeping the same logical project.
   const onEnvironmentChange = useCallback(
     (nextEnvironmentId: EnvironmentId) => {
-      if (envLocked || !draftId) return;
+      if (
+        !canChangeDraftEnvironment({
+          hasDraftId: draftId !== null,
+          environmentLocked: envLocked,
+          isTaskRepositoryDraft,
+        }) ||
+        !draftId
+      ) {
+        return;
+      }
       const target = logicalProjectEnvironments.find(
         (env) => env.environmentId === nextEnvironmentId,
       );
@@ -2556,7 +2597,7 @@ function ChatViewContent(props: ChatViewProps) {
         projectRef: scopeProjectRef(target.environmentId, target.projectId),
       });
     },
-    [draftId, envLocked, logicalProjectEnvironments, setDraftThreadContext],
+    [draftId, envLocked, isTaskRepositoryDraft, logicalProjectEnvironments, setDraftThreadContext],
   );
 
   const activeTerminalGroup =
@@ -3966,9 +4007,12 @@ function ChatViewContent(props: ChatViewProps) {
     activeThread.worktreePath === null &&
     !envLocked,
   );
-  const envMode: DraftThreadEnvMode = canOverrideServerThreadEnvMode
-    ? (pendingServerThreadEnvMode ?? draftThread?.envMode ?? derivedEnvMode)
-    : derivedEnvMode;
+  const envMode = enforceTaskDraftEnvMode({
+    requestedEnvMode: canOverrideServerThreadEnvMode
+      ? (pendingServerThreadEnvMode ?? draftThread?.envMode ?? derivedEnvMode)
+      : derivedEnvMode,
+    isTaskRepositoryDraft,
+  });
   const activeThreadBranch =
     canOverrideServerThreadEnvMode && pendingServerThreadBranch !== undefined
       ? pendingServerThreadBranch
@@ -4416,7 +4460,6 @@ function ChatViewContent(props: ChatViewProps) {
       setThreadError(threadIdForSend, "Select a base branch before sending in New worktree mode.");
       return;
     }
-
     sendInFlightRef.current = true;
     if (isDraftHeroState && activeThreadKey) {
       let resolveDockStarted: (() => void) | undefined;
@@ -4584,7 +4627,12 @@ function ChatViewContent(props: ChatViewProps) {
 
     let turnStartSucceeded = false;
     if (failure === null && turnAttachmentsResult._tag === "Success") {
-      const taskDraft = isLocalDraftThread ? draftThread?.taskDraft : undefined;
+      const taskDraft = draftThread?.taskDraft;
+      const sendProjectRef = resolveDraftSendProjectRef({
+        draftThread: draftThread ?? undefined,
+        environmentId,
+        projectId: activeProject.id,
+      });
       const bootstrap =
         isLocalDraftThread || baseBranchForWorktree
           ? {
@@ -4599,10 +4647,14 @@ function ChatViewContent(props: ChatViewProps) {
                     },
                   }
                 : {}),
-              ...(isLocalDraftThread
+              ...(shouldIncludeDraftThreadBootstrap({
+                isLocalDraftThread,
+                hasTaskDraft: taskDraft !== undefined,
+                isFirstMessage,
+              })
                 ? {
                     createThread: {
-                      projectId: taskDraftTargetProjectId ?? activeProject.id,
+                      projectId: taskDraftTargetProjectId ?? sendProjectRef.projectId,
                       title,
                       modelSelection: threadCreateModelSelection,
                       runtimeMode,
@@ -4619,21 +4671,18 @@ function ChatViewContent(props: ChatViewProps) {
                   }
                 : {}),
               ...(baseBranchForWorktree
-                ? {
-                    prepareWorktree: {
-                      projectCwd: activeProject.workspaceRoot,
-                      baseBranch: baseBranchForWorktree,
-                      branch: buildTemporaryWorktreeBranchName(randomHex),
-                      ...(startFromOrigin ? { startFromOrigin: true } : {}),
-                    },
-                    runSetupScript: true,
-                  }
+                ? buildDraftWorktreeBootstrap({
+                    projectCwd: activeProject.workspaceRoot,
+                    baseBranch: baseBranchForWorktree,
+                    branch: buildTemporaryWorktreeBranchName(randomHex),
+                    startFromOrigin,
+                  })
                 : {}),
             }
           : undefined;
       beginLocalDispatch({ preparingWorktree: false });
       const startResult = await startThreadTurn({
-        environmentId,
+        environmentId: sendProjectRef.environmentId,
         input: {
           threadId: threadIdForSend,
           message: {
@@ -4691,6 +4740,17 @@ function ChatViewContent(props: ChatViewProps) {
           cursor: collapseExpandedComposerCursor(promptForSend, promptForSend.length),
           prompt: promptForSend,
           detectTrigger: true,
+        });
+      }
+      if (isLocalDraftThread && isTaskRepositoryDraft && draftId && draftThread) {
+        const failedThreadRef = scopeThreadRef(activeThread.environmentId, threadIdForSend);
+        recoverTaskRepositoryDraftFirstSendFailure(draftId, {
+          failedThreadId: threadIdForSend,
+          durableThreadMatches: durableThreadMatchesTaskRepositoryDraft(
+            draftThread,
+            readThreadShell(failedThreadRef),
+          ),
+          replacementThreadId: newThreadId(),
         });
       }
       if (!isAtomCommandInterrupted(failure)) {
@@ -5311,6 +5371,10 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const onEnvModeChange = useCallback(
     (mode: DraftThreadEnvMode) => {
+      if (isTaskRepositoryDraft) {
+        scheduleComposerFocus();
+        return;
+      }
       if (canOverrideServerThreadEnvMode) {
         setPendingServerThreadEnvMode(mode);
         scheduleComposerFocus();
@@ -5333,6 +5397,7 @@ function ChatViewContent(props: ChatViewProps) {
       composerDraftTarget,
       draftThread?.worktreePath,
       isLocalDraftThread,
+      isTaskRepositoryDraft,
       settings.newWorktreesStartFromOrigin,
       setPendingServerThreadEnvMode,
       scheduleComposerFocus,
@@ -5841,11 +5906,15 @@ function ChatViewContent(props: ChatViewProps) {
                                     }
                                   : {})}
                                 envLocked={envLocked}
+                                envModeLocked={isTaskRepositoryDraft}
+                                environmentLocked={isTaskRepositoryDraft}
                                 onComposerFocusRequest={scheduleComposerFocus}
                                 {...(canCheckoutPullRequestIntoThread
                                   ? { onCheckoutPullRequestRequest: openPullRequestDialog }
                                   : {})}
-                                {...(hasMultipleEnvironments ? { onEnvironmentChange } : {})}
+                                {...(hasMultipleEnvironments && !isTaskRepositoryDraft
+                                  ? { onEnvironmentChange }
+                                  : {})}
                                 availableEnvironments={logicalProjectEnvironments}
                               />
                             </div>

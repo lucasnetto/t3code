@@ -1,5 +1,11 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
-import type { EnvironmentId, ProjectId, ScopedProjectRef } from "@t3tools/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  type EnvironmentId,
+  type ProjectId,
+  type ScopedProjectRef,
+  type ServerSettings,
+} from "@t3tools/contracts";
 import type { DraftThreadEnvMode } from "../composerDraftStore";
 
 interface ThreadContextLike {
@@ -40,6 +46,24 @@ export function resolveNewDraftStartFromOrigin(input: {
   newWorktreesStartFromOrigin: boolean;
 }): boolean {
   return input.envMode === "worktree" && input.newWorktreesStartFromOrigin;
+}
+
+export function resolveTaskRepositoryDraftStartFromOrigin(input: {
+  hasTargetProject: boolean;
+  taskEnvironmentId: EnvironmentId;
+  serverConfigs: ReadonlyMap<
+    EnvironmentId,
+    {
+      readonly settings: Pick<ServerSettings, "newWorktreesStartFromOrigin">;
+    }
+  >;
+}): boolean {
+  return resolveNewDraftStartFromOrigin({
+    envMode: input.hasTargetProject ? "worktree" : "local",
+    newWorktreesStartFromOrigin:
+      input.serverConfigs.get(input.taskEnvironmentId)?.settings.newWorktreesStartFromOrigin ??
+      DEFAULT_SERVER_SETTINGS.newWorktreesStartFromOrigin,
+  });
 }
 
 export function resolveThreadActionProjectRef(

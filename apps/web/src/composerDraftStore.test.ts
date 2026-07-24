@@ -792,6 +792,19 @@ describe("composerDraftStore project draft thread mapping", () => {
       approvedProjectIds: [projectId, otherProjectId],
       createTask: true,
     });
+
+    store.setDraftThreadContext(draftId, {
+      projectRef: remoteProjectRef,
+    });
+
+    expect(useComposerDraftStore.getState().getDraftSession(draftId)).toMatchObject({
+      environmentId: OTHER_TEST_ENVIRONMENT_ID,
+      projectId,
+      taskDraft: {
+        taskId,
+        createTask: true,
+      },
+    });
   });
 
   it("removes unavailable task approvals and moves a stale anchor to the first survivor", () => {
@@ -905,7 +918,8 @@ describe("composerDraftStore project draft thread mapping", () => {
 
     store.setLogicalProjectDraftThreadId("task-thread-draft", otherProjectRef, draftId, {
       threadId,
-      envMode: "worktree",
+      envMode: "local",
+      worktreePath: "/tmp/shared-checkout",
       taskDraft: {
         taskId,
         title: "Ship payments",
@@ -913,14 +927,184 @@ describe("composerDraftStore project draft thread mapping", () => {
         approvedProjectIds: [projectId, otherProjectId],
         createTask: false,
         targetProjectId: otherProjectId,
+        taskEnvironmentId: TEST_ENVIRONMENT_ID,
       },
     });
 
-    expect(useComposerDraftStore.getState().getDraftSession(draftId)?.taskDraft).toMatchObject({
-      taskId,
-      createTask: false,
-      targetProjectId: otherProjectId,
+    expect(useComposerDraftStore.getState().getDraftSession(draftId)).toMatchObject({
+      envMode: "worktree",
+      worktreePath: null,
+      taskDraft: {
+        taskId,
+        createTask: false,
+        targetProjectId: otherProjectId,
+      },
     });
+
+    store.setDraftThreadContext(draftId, {
+      envMode: "local",
+      worktreePath: "/tmp/shared-checkout",
+      projectRef: scopeProjectRef(OTHER_TEST_ENVIRONMENT_ID, projectId),
+    });
+
+    expect(useComposerDraftStore.getState().getDraftSession(draftId)).toMatchObject({
+      environmentId: TEST_ENVIRONMENT_ID,
+      projectId: otherProjectId,
+      envMode: "worktree",
+      worktreePath: null,
+      taskDraft: {
+        taskId,
+        createTask: false,
+        targetProjectId: otherProjectId,
+        taskEnvironmentId: TEST_ENVIRONMENT_ID,
+      },
+    });
+  });
+
+  it("rotates only an unaccepted repository thread id after first-send failure", () => {
+    const store = useComposerDraftStore.getState();
+    const taskId = TaskId.make("task-retry");
+    const workspaceProjectId = ProjectId.make("project-task-retry");
+    const retryThreadId = ThreadId.make("thread-retry");
+
+    store.setLogicalProjectDraftThreadId("task-thread-draft:retry", otherProjectRef, draftId, {
+      threadId,
+      branch: "main",
+      taskDraft: {
+        taskId,
+        title: "Retry worktree bootstrap",
+        workspaceProjectId,
+        approvedProjectIds: [otherProjectId],
+        createTask: false,
+        targetProjectId: otherProjectId,
+      },
+    });
+    store.setPrompt(draftId, "Keep this message for retry");
+
+    expect(
+      store.recoverTaskRepositoryDraftFirstSendFailure(draftId, {
+        failedThreadId: threadId,
+        durableThreadMatches: false,
+        replacementThreadId: retryThreadId,
+      }),
+    ).toBe(retryThreadId);
+    expect(useComposerDraftStore.getState().getDraftSession(draftId)).toMatchObject({
+      threadId: retryThreadId,
+      branch: "main",
+      worktreePath: null,
+      envMode: "worktree",
+      firstSendFailed: false,
+      taskDraft: {
+        taskId,
+        targetProjectId: otherProjectId,
+      },
+    });
+    expect(useComposerDraftStore.getState().getComposerDraft(draftId)?.prompt).toBe(
+      "Keep this message for retry",
+    );
+
+    const ignoredReplacement = ThreadId.make("thread-must-not-replace-durable");
+    expect(
+      store.recoverTaskRepositoryDraftFirstSendFailure(draftId, {
+        failedThreadId: retryThreadId,
+        durableThreadMatches: true,
+        replacementThreadId: ignoredReplacement,
+      }),
+    ).toBe(retryThreadId);
+    expect(useComposerDraftStore.getState().getDraftSession(draftId)).toMatchObject({
+      threadId: retryThreadId,
+      firstSendFailed: true,
+    });
+  });
+
+  it("repairs persisted repository task drafts that selected a shared checkout", () => {
+    const taskId = TaskId.make("task-persisted");
+    const workspaceProjectId = ProjectId.make("project-task-persisted");
+    const persistApi = useComposerDraftStore.persist as unknown as {
+      getOptions: () => {
+        merge: (
+          persistedState: unknown,
+          currentState: ReturnType<typeof useComposerDraftStore.getState>,
+        ) => ReturnType<typeof useComposerDraftStore.getState>;
+      };
+    };
+
+    const mergedState = persistApi.getOptions().merge(
+      {
+        draftsByThreadKey: {
+          [threadKeyFor(threadId, TEST_ENVIRONMENT_ID)]: {
+            prompt: "Retry this hydrated message",
+            attachments: [],
+          },
+        },
+        draftThreadsByThreadKey: {
+          [threadKeyFor(threadId, TEST_ENVIRONMENT_ID)]: {
+            threadId,
+            environmentId: TEST_ENVIRONMENT_ID,
+            projectId: otherProjectId,
+            logicalProjectKey: "task-thread-draft:persisted",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: "main",
+            worktreePath: "/tmp/shared-checkout",
+            envMode: "local",
+            startFromOrigin: false,
+            taskDraft: {
+              taskId,
+              title: "Ship payments",
+              workspaceProjectId,
+              approvedProjectIds: [otherProjectId],
+              createTask: false,
+              targetProjectId: otherProjectId,
+              taskEnvironmentId: OTHER_TEST_ENVIRONMENT_ID,
+            },
+            firstSendFailed: true,
+            promotedTo: null,
+          },
+        },
+        logicalProjectDraftThreadKeyByLogicalProjectKey: {
+          "task-thread-draft:persisted": threadKeyFor(threadId, TEST_ENVIRONMENT_ID),
+        },
+      },
+      useComposerDraftStore.getInitialState(),
+    );
+
+    expect(
+      mergedState.draftThreadsByThreadKey[threadKeyFor(threadId, TEST_ENVIRONMENT_ID)],
+    ).toMatchObject({
+      environmentId: OTHER_TEST_ENVIRONMENT_ID,
+      projectId: otherProjectId,
+      envMode: "worktree",
+      worktreePath: null,
+      taskDraft: {
+        taskId,
+        createTask: false,
+        targetProjectId: otherProjectId,
+        taskEnvironmentId: OTHER_TEST_ENVIRONMENT_ID,
+      },
+      firstSendFailed: true,
+    });
+
+    useComposerDraftStore.setState(mergedState);
+    const hydratedRetryThreadId = ThreadId.make("thread-hydrated-retry");
+    const hydratedDraftId = DraftId.make(threadKeyFor(threadId, TEST_ENVIRONMENT_ID));
+    expect(
+      useComposerDraftStore.getState().recoverTaskRepositoryDraftFirstSendFailure(hydratedDraftId, {
+        failedThreadId: threadId,
+        durableThreadMatches: false,
+        replacementThreadId: hydratedRetryThreadId,
+      }),
+    ).toBe(hydratedRetryThreadId);
+    expect(useComposerDraftStore.getState().getDraftSession(hydratedDraftId)).toMatchObject({
+      threadId: hydratedRetryThreadId,
+      worktreePath: null,
+      envMode: "worktree",
+      firstSendFailed: false,
+    });
+    expect(useComposerDraftStore.getState().getComposerDraft(hydratedDraftId)?.prompt).toBe(
+      "Retry this hydrated message",
+    );
   });
 
   it("clears only matching project draft mapping entries", () => {

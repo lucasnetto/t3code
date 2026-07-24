@@ -25,7 +25,10 @@ import {
   selectProjectGroupingSettings,
 } from "../logicalProject";
 import { readThreadShell, useProjects, useServerConfigs, useThread } from "../state/entities";
-import { resolveNewDraftStartFromOrigin } from "../lib/chatThreadActions";
+import {
+  resolveNewDraftStartFromOrigin,
+  resolveTaskRepositoryDraftStartFromOrigin,
+} from "../lib/chatThreadActions";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
 import { useClientSettings } from "./useSettings";
@@ -239,6 +242,7 @@ export function useNewTaskHandler() {
 
 export function useNewTaskThreadHandler() {
   const router = useRouter();
+  const serverConfigs = useServerConfigs();
 
   return useCallback(
     async (task: EnvironmentTask, targetProject?: EnvironmentProject): Promise<void> => {
@@ -261,7 +265,11 @@ export function useNewTaskThreadHandler() {
           branch: null,
           worktreePath: null,
           envMode: targetProject ? "worktree" : "local",
-          startFromOrigin: false,
+          startFromOrigin: resolveTaskRepositoryDraftStartFromOrigin({
+            hasTargetProject: targetProject !== undefined,
+            taskEnvironmentId: task.environmentId,
+            serverConfigs,
+          }),
           runtimeMode: DEFAULT_RUNTIME_MODE,
           taskDraft: {
             taskId: task.id,
@@ -269,6 +277,7 @@ export function useNewTaskThreadHandler() {
             workspaceProjectId: task.workspaceProjectId,
             approvedProjectIds: task.approvedProjectIds,
             createTask: false,
+            taskEnvironmentId: task.environmentId,
             ...(targetProject ? { targetProjectId: targetProject.id } : {}),
           },
         },
@@ -280,7 +289,7 @@ export function useNewTaskThreadHandler() {
         params: { draftId },
       });
     },
-    [router],
+    [router, serverConfigs],
   );
 }
 

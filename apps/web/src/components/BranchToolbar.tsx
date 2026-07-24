@@ -20,6 +20,7 @@ import {
   resolveEnvModeLabel,
   resolveEffectiveEnvMode,
   resolveLockedWorkspaceLabel,
+  shouldEnableEnvironmentPicker,
   shouldShowEnvironmentIndicator,
 } from "./BranchToolbar.logic";
 import { BranchToolbarBranchSelector } from "./BranchToolbarBranchSelector";
@@ -49,6 +50,8 @@ interface BranchToolbarProps {
   startFromOrigin: boolean;
   onStartFromOriginChange: (startFromOrigin: boolean) => void;
   envLocked: boolean;
+  envModeLocked?: boolean;
+  environmentLocked?: boolean;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
   availableEnvironments?: readonly EnvironmentOption[];
@@ -58,6 +61,7 @@ interface BranchToolbarProps {
 interface MobileRunContextSelectorProps {
   envLocked: boolean;
   envModeLocked: boolean;
+  environmentLocked: boolean;
   environmentId: EnvironmentId;
   availableEnvironments: readonly EnvironmentOption[] | undefined;
   showEnvironmentPicker: boolean;
@@ -71,6 +75,7 @@ interface MobileRunContextSelectorProps {
 const MobileRunContextSelector = memo(function MobileRunContextSelector({
   envLocked,
   envModeLocked,
+  environmentLocked,
   environmentId,
   availableEnvironments,
   showEnvironmentPicker,
@@ -91,11 +96,11 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
         ? FolderGitIcon
         : FolderIcon;
   const workspaceLabel = envModeLocked
-    ? resolveLockedWorkspaceLabel(activeWorktreePath)
+    ? resolveLockedWorkspaceLabel(activeWorktreePath, effectiveEnvMode)
     : effectiveEnvMode === "worktree"
       ? resolveEnvModeLabel("worktree")
       : resolveCurrentWorkspaceLabel(activeWorktreePath);
-  const isLocked = envLocked || envModeLocked;
+  const isLocked = envLocked || envModeLocked || environmentLocked;
   const EnvironmentIcon = activeEnvironment?.isPrimary ? MonitorIcon : CloudIcon;
   const icon = showEnvironmentIndicator ? (
     // Button's base styles apply `-mx-0.5` to descendant SVGs, which eats 4px
@@ -204,6 +209,8 @@ export const BranchToolbar = memo(function BranchToolbar({
   startFromOrigin,
   onStartFromOriginChange,
   envLocked,
+  envModeLocked: envModeLockedOverride = false,
+  environmentLocked = false,
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
   availableEnvironments,
@@ -232,11 +239,14 @@ export const BranchToolbar = memo(function BranchToolbar({
       hasServerThread: serverThread !== null,
       draftThreadEnvMode: draftThread?.envMode,
     });
-  const envModeLocked = envLocked || (serverThread !== null && activeWorktreePath !== null);
+  const envModeLocked =
+    envLocked || envModeLockedOverride || (serverThread !== null && activeWorktreePath !== null);
 
-  const showEnvironmentPicker = Boolean(
-    availableEnvironments && availableEnvironments.length > 1 && onEnvironmentChange,
-  );
+  const showEnvironmentPicker = shouldEnableEnvironmentPicker({
+    environmentCount: availableEnvironments?.length ?? 0,
+    hasEnvironmentChangeHandler: onEnvironmentChange !== undefined,
+    environmentLocked: envLocked || environmentLocked,
+  });
   const activeEnvironmentOption =
     availableEnvironments?.find((env) => env.environmentId === environmentId) ?? null;
   const showEnvironmentIndicator = shouldShowEnvironmentIndicator({
@@ -253,6 +263,7 @@ export const BranchToolbar = memo(function BranchToolbar({
         <MobileRunContextSelector
           envLocked={envLocked}
           envModeLocked={envModeLocked}
+          environmentLocked={environmentLocked}
           environmentId={environmentId}
           availableEnvironments={availableEnvironments}
           showEnvironmentPicker={showEnvironmentPicker}
@@ -267,7 +278,7 @@ export const BranchToolbar = memo(function BranchToolbar({
           {showEnvironmentIndicator && availableEnvironments && (
             <>
               <BranchToolbarEnvironmentSelector
-                envLocked={envLocked}
+                envLocked={envLocked || environmentLocked}
                 environmentId={environmentId}
                 availableEnvironments={availableEnvironments}
                 {...(showEnvironmentPicker && onEnvironmentChange ? { onEnvironmentChange } : {})}

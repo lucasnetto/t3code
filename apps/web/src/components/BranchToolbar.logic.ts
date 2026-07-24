@@ -53,6 +53,16 @@ export function shouldShowEnvironmentIndicator(input: {
   return input.activeEnvironment !== null && !input.activeEnvironment.isPrimary;
 }
 
+export function shouldEnableEnvironmentPicker(input: {
+  environmentCount: number;
+  hasEnvironmentChangeHandler: boolean;
+  environmentLocked: boolean;
+}): boolean {
+  return (
+    input.environmentCount > 1 && input.hasEnvironmentChangeHandler && !input.environmentLocked
+  );
+}
+
 export function resolveEnvModeLabel(mode: EnvMode): string {
   return mode === "worktree" ? "New worktree" : "Current checkout";
 }
@@ -61,7 +71,13 @@ export function resolveCurrentWorkspaceLabel(activeWorktreePath: string | null):
   return activeWorktreePath ? "Current worktree" : resolveEnvModeLabel("local");
 }
 
-export function resolveLockedWorkspaceLabel(activeWorktreePath: string | null): string {
+export function resolveLockedWorkspaceLabel(
+  activeWorktreePath: string | null,
+  effectiveEnvMode?: EnvMode,
+): string {
+  if (!activeWorktreePath && effectiveEnvMode === "worktree") {
+    return resolveEnvModeLabel("worktree");
+  }
   return activeWorktreePath ? "Worktree" : "Local checkout";
 }
 
