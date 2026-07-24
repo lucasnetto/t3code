@@ -158,337 +158,344 @@ function pullRequestTargetIdentityMatches(
 }
 
 const handlers = {
-  task_spawn_thread: ({ message, projectId, baseRef }) =>
-    Effect.gen(function* () {
-      const operation = "task.spawn_thread";
-      const scope = yield* requireActiveTaskMutationScope(operation);
-      const invocation = yield* McpInvocationContext.McpInvocationContext;
-      const caller = scope.caller;
-      const spawningTurnId = scope.activeTurnId;
+  task_spawn_thread: Effect.fn("TaskCoordinationToolkit.task_spawn_thread")(function* ({
+    message,
+    projectId,
+    baseRef,
+  }) {
+    const operation = "task.spawn_thread";
+    const scope = yield* requireActiveTaskMutationScope(operation);
+    const invocation = yield* McpInvocationContext.McpInvocationContext;
+    const caller = scope.caller;
+    const spawningTurnId = scope.activeTurnId;
 
-      const targetProjectId = projectId ?? scope.task.workspaceProjectId;
-      const project = scope.projects.find((candidate) => candidate.id === targetProjectId);
-      if (!project) {
-        return yield* failTaskTool(
-          operation,
-          `Project '${targetProjectId}' is not available in this task.`,
-        );
-      }
-      if (
-        targetProjectId !== scope.task.workspaceProjectId &&
-        !scope.task.approvedProjectIds.includes(targetProjectId)
-      ) {
-        return yield* failTaskTool(
-          operation,
-          `Project '${targetProjectId}' is not approved for this task.`,
-        );
-      }
-      if (targetProjectId === scope.task.workspaceProjectId && baseRef !== undefined) {
-        return yield* failTaskTool(
-          operation,
-          "baseRef is only valid when spawning a repository-bound task thread.",
-        );
-      }
-
-      const crypto = yield* Crypto.Crypto;
-      const uuid = yield* crypto.randomUUIDv4.pipe(
-        Effect.mapError(() => failTaskTool(operation, "Could not allocate thread identifiers.")),
+    const targetProjectId = projectId ?? scope.task.workspaceProjectId;
+    const project = scope.projects.find((candidate) => candidate.id === targetProjectId);
+    if (!project) {
+      return yield* failTaskTool(
+        operation,
+        `Project '${targetProjectId}' is not available in this task.`,
       );
-      const threadId = ThreadId.make(uuid);
-      const commandId = (suffix: string) => CommandId.make(`task:${suffix}:${uuid}`);
-      const messageId = MessageId.make(`task:message:${uuid}`);
-      const createdAt = DateTime.formatIso(yield* DateTime.now);
-      const engine = yield* OrchestrationEngine.OrchestrationEngineService;
-      const git = yield* GitWorkflowService.GitWorkflowService;
-      const taskWorkspace = yield* TaskWorkspaceService.TaskWorkspaceService;
-      const setup = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
-      let createdThread = false;
-      let createdWorktree: string | null = null;
-      let createdBranch: GitCreatedBranch | null = null;
-      let branch: string | null = null;
+    }
+    if (
+      targetProjectId !== scope.task.workspaceProjectId &&
+      !scope.task.approvedProjectIds.includes(targetProjectId)
+    ) {
+      return yield* failTaskTool(
+        operation,
+        `Project '${targetProjectId}' is not approved for this task.`,
+      );
+    }
+    if (targetProjectId === scope.task.workspaceProjectId && baseRef !== undefined) {
+      return yield* failTaskTool(
+        operation,
+        "baseRef is only valid when spawning a repository-bound task thread.",
+      );
+    }
 
-      const cleanup = Effect.gen(function* () {
-        let worktreeRemoved = createdWorktree === null;
-        if (createdWorktree !== null && createdBranch !== null) {
-          const cleanupExit = yield* Effect.exit(
-            git.cleanupCreatedWorktree({
-              cwd: project.workspaceRoot,
-              path: createdWorktree,
-              createdBranch,
-            }),
-          );
-          if (Exit.isSuccess(cleanupExit)) {
-            worktreeRemoved = true;
-            if (cleanupExit.value.branch === "retained") {
-              yield* Effect.logWarning(
-                "Task thread cleanup removed the worktree but retained its changed branch",
-                {
-                  threadId,
-                  branch: createdBranch.refName,
-                  reason: cleanupExit.value.reason,
-                },
-              );
-            }
-          } else {
+    const crypto = yield* Crypto.Crypto;
+    const uuid = yield* crypto.randomUUIDv4.pipe(
+      Effect.mapError(() => failTaskTool(operation, "Could not allocate thread identifiers.")),
+    );
+    const threadId = ThreadId.make(uuid);
+    const commandId = (suffix: string) => CommandId.make(`task:${suffix}:${uuid}`);
+    const messageId = MessageId.make(`task:message:${uuid}`);
+    const createdAt = DateTime.formatIso(yield* DateTime.now);
+    const engine = yield* OrchestrationEngine.OrchestrationEngineService;
+    const git = yield* GitWorkflowService.GitWorkflowService;
+    const taskWorkspace = yield* TaskWorkspaceService.TaskWorkspaceService;
+    const setup = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+    let createdThread = false;
+    let createdWorktree: string | null = null;
+    let createdBranch: GitCreatedBranch | null = null;
+    let branch: string | null = null;
+
+    const cleanup = Effect.gen(function* () {
+      let worktreeRemoved = createdWorktree === null;
+      if (createdWorktree !== null && createdBranch !== null) {
+        const cleanupExit = yield* Effect.exit(
+          git.cleanupCreatedWorktree({
+            cwd: project.workspaceRoot,
+            path: createdWorktree,
+            createdBranch,
+          }),
+        );
+        if (Exit.isSuccess(cleanupExit)) {
+          worktreeRemoved = true;
+          if (cleanupExit.value.branch === "retained") {
             yield* Effect.logWarning(
-              "Task thread worktree cleanup failed; retaining its durable owner when available",
+              "Task thread cleanup removed the worktree but retained its changed branch",
               {
                 threadId,
-                projectCwd: project.workspaceRoot,
-                worktreePath: createdWorktree,
-                cause: Cause.pretty(cleanupExit.cause),
-                recovery:
-                  "Resolve or remove the retained worktree, then delete or retry the owning thread.",
+                branch: createdBranch.refName,
+                reason: cleanupExit.value.reason,
               },
             );
           }
-        } else if (createdWorktree !== null) {
-          const removalExit = yield* Effect.exit(
-            git.removeWorktree({
-              cwd: project.workspaceRoot,
-              path: createdWorktree,
-            }),
-          );
-          worktreeRemoved = Exit.isSuccess(removalExit);
+        } else {
           yield* Effect.logWarning(
-            worktreeRemoved
-              ? "Task thread cleanup removed a worktree but retained its branch because creation proof was unavailable"
-              : "Task thread cleanup lacked created-branch proof and could not remove its worktree",
+            "Task thread worktree cleanup failed; retaining its durable owner when available",
             {
               threadId,
+              projectCwd: project.workspaceRoot,
               worktreePath: createdWorktree,
-              ...(Exit.isFailure(removalExit) ? { cause: Cause.pretty(removalExit.cause) } : {}),
-              recovery: worktreeRemoved
-                ? "Review and remove the retained branch if it is no longer needed."
-                : "Resolve or remove the retained worktree, then delete or retry the owning thread.",
-            },
-          );
-        }
-        if (createdThread && worktreeRemoved) {
-          yield* engine
-            .dispatch({
-              type: "thread.delete",
-              commandId: commandId("cleanup"),
-              threadId,
-            })
-            .pipe(Effect.ignoreCause({ log: true }));
-        } else if (createdThread) {
-          yield* Effect.logWarning(
-            "Task thread cleanup retained the durable owner because its worktree was not removed",
-            {
-              threadId,
-              worktreePath: createdWorktree,
+              cause: Cause.pretty(cleanupExit.cause),
               recovery:
                 "Resolve or remove the retained worktree, then delete or retry the owning thread.",
             },
           );
         }
-      }).pipe(Effect.uninterruptible);
-
-      const program = Effect.uninterruptibleMask((restore) =>
-        Effect.gen(function* () {
-          if (targetProjectId !== scope.task.workspaceProjectId) {
-            const resolvedBase = yield* restore(
-              resolveSpawnBaseRef(git, project.workspaceRoot, baseRef),
-            );
-            const requestedBranch = `t3-task-${uuid}`;
-            const path = taskWorkspace.managedWorktreePath({
-              taskRoot: scope.task.rootPath,
-              threadId,
-              projectTitle: project.title,
-            });
-            // The create call and ownership registration are one commit point:
-            // cancellation is observed only after the returned worktree is recorded.
-            const worktree = yield* git.createWorktree({
-              cwd: project.workspaceRoot,
-              refName: resolvedBase,
-              newRefName: requestedBranch,
-              baseRefName: resolvedBase,
-              path,
-            });
-            createdWorktree = worktree.worktree.path;
-            createdBranch = worktree.createdBranch ?? null;
-            branch = worktree.worktree.refName;
-          }
-
-          const createCommand: Extract<OrchestrationCommand, { type: "thread.agent.create" }> = {
-            type: "thread.agent.create",
-            commandId: commandId("create"),
+      } else if (createdWorktree !== null) {
+        const removalExit = yield* Effect.exit(
+          git.removeWorktree({
+            cwd: project.workspaceRoot,
+            path: createdWorktree,
+          }),
+        );
+        worktreeRemoved = Exit.isSuccess(removalExit);
+        yield* Effect.logWarning(
+          worktreeRemoved
+            ? "Task thread cleanup removed a worktree but retained its branch because creation proof was unavailable"
+            : "Task thread cleanup lacked created-branch proof and could not remove its worktree",
+          {
             threadId,
-            projectId: targetProjectId,
-            taskId: scope.task.id,
-            spawningThreadId: invocation.threadId,
-            spawningTurnId,
-            title: titleFromMessage(message),
-            modelSelection: project.defaultModelSelection ?? caller.modelSelection,
-            runtimeMode: caller.runtimeMode,
-            interactionMode: caller.interactionMode,
-            branch,
             worktreePath: createdWorktree,
-            createdAt,
-          };
-          const refreshedScope = yield* restore(requireActiveTaskMutationScope(operation));
-          if (refreshedScope.activeTurnId !== spawningTurnId) {
-            return yield* failTaskTool(
-              operation,
-              "The calling provider turn changed before the task thread could be created.",
-            );
-          }
-          // Dispatch and ownership registration are likewise one commit point.
-          yield* engine.dispatch(createCommand);
-          createdThread = true;
-
-          if (createdWorktree) {
-            yield* restore(
-              setup
-                .runForThread({
-                  threadId,
-                  projectId: targetProjectId,
-                  projectCwd: project.workspaceRoot,
-                  worktreePath: createdWorktree,
-                })
-                .pipe(
-                  Effect.catch((cause) =>
-                    Effect.logWarning("Task thread setup script failed to launch", {
-                      threadId,
-                      cause,
-                    }),
-                  ),
-                ),
-            );
-          }
-
-          yield* restore(
-            engine.dispatch({
-              type: "thread.turn.start",
-              commandId: commandId("turn"),
-              threadId,
-              message: {
-                messageId,
-                role: "user",
-                text: message,
-                attachments: [],
-              },
-              modelSelection: createCommand.modelSelection,
-              runtimeMode: createCommand.runtimeMode,
-              interactionMode: createCommand.interactionMode,
-              createdAt,
-            }),
-          );
-
-          const query = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
-          yield* restore(
-            query.getShellSnapshot().pipe(
-              Effect.flatMap((snapshot) =>
-                taskWorkspace.prepare({
-                  task: scope.task,
-                  projects: snapshot.projects,
-                  threads: snapshot.threads,
-                }),
-              ),
-              Effect.catch((cause) =>
-                Effect.logWarning("Failed to refresh task context after spawning thread", {
-                  threadId,
-                  cause,
-                }),
-              ),
-            ),
-          );
-
-          return {
-            threadId,
-            projectId: targetProjectId,
-            branch,
-            worktreePath: createdWorktree,
-          };
-        }),
-      );
-
-      return yield* program.pipe(
-        Effect.onExit((exit) => (Exit.isFailure(exit) ? cleanup : Effect.void)),
-        Effect.catchCause((cause) => {
-          const interruptionReasons = cause.reasons.filter(Cause.isInterruptReason);
-          if (interruptionReasons.length > 0) {
-            return Effect.failCause(Cause.fromReasons<never>(interruptionReasons));
-          }
-          const error = Cause.squash(cause);
-          return Effect.fail(
-            failTaskTool(
-              operation,
-              error instanceof Error ? error.message : "Could not spawn the task thread.",
-            ),
-          );
-        }),
-      );
-    }),
-  task_send_message: ({ threadId, message }) =>
-    Effect.gen(function* () {
-      const operation = "task.send_message";
-      const scope = yield* requireActiveTaskMutationScope(operation);
-      const target = yield* requireTaskThread(scope, threadId, operation);
-      if (target.taskContext?.createdBy.kind !== "agent") {
-        return yield* failTaskTool(
-          operation,
-          "Follow-up messages may target only agent-created threads.",
+            ...(Exit.isFailure(removalExit) ? { cause: Cause.pretty(removalExit.cause) } : {}),
+            recovery: worktreeRemoved
+              ? "Review and remove the retained branch if it is no longer needed."
+              : "Resolve or remove the retained worktree, then delete or retry the owning thread.",
+          },
         );
       }
-      if (target.latestTurn?.state === "running") {
-        return yield* failTaskTool(operation, `Thread '${threadId}' is still working.`);
-      }
-      const crypto = yield* Crypto.Crypto;
-      const uuid = yield* crypto.randomUUIDv4.pipe(
-        Effect.mapError(() => failTaskTool(operation, "Could not allocate message identifiers.")),
-      );
-      const createdAt = DateTime.formatIso(yield* DateTime.now);
-      const engine = yield* OrchestrationEngine.OrchestrationEngineService;
-      yield* engine
-        .dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.make(`task:message:${uuid}`),
-          threadId,
-          message: {
-            messageId: MessageId.make(`task:message:${uuid}`),
-            role: "user",
-            text: message,
-            attachments: [],
+      if (createdThread && worktreeRemoved) {
+        yield* engine
+          .dispatch({
+            type: "thread.delete",
+            commandId: commandId("cleanup"),
+            threadId,
+          })
+          .pipe(Effect.ignoreCause({ log: true }));
+      } else if (createdThread) {
+        yield* Effect.logWarning(
+          "Task thread cleanup retained the durable owner because its worktree was not removed",
+          {
+            threadId,
+            worktreePath: createdWorktree,
+            recovery:
+              "Resolve or remove the retained worktree, then delete or retry the owning thread.",
           },
-          modelSelection: target.modelSelection,
-          runtimeMode: target.runtimeMode,
-          interactionMode: target.interactionMode,
+        );
+      }
+    }).pipe(Effect.uninterruptible);
+
+    const program = Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        if (targetProjectId !== scope.task.workspaceProjectId) {
+          const resolvedBase = yield* restore(
+            resolveSpawnBaseRef(git, project.workspaceRoot, baseRef),
+          );
+          const requestedBranch = `t3-task-${uuid}`;
+          const path = taskWorkspace.managedWorktreePath({
+            taskRoot: scope.task.rootPath,
+            threadId,
+            projectTitle: project.title,
+          });
+          // The create call and ownership registration are one commit point:
+          // cancellation is observed only after the returned worktree is recorded.
+          const worktree = yield* git.createWorktree({
+            cwd: project.workspaceRoot,
+            refName: resolvedBase,
+            newRefName: requestedBranch,
+            baseRefName: resolvedBase,
+            path,
+          });
+          createdWorktree = worktree.worktree.path;
+          createdBranch = worktree.createdBranch ?? null;
+          branch = worktree.worktree.refName;
+        }
+
+        const createCommand: Extract<OrchestrationCommand, { type: "thread.agent.create" }> = {
+          type: "thread.agent.create",
+          commandId: commandId("create"),
+          threadId,
+          projectId: targetProjectId,
+          taskId: scope.task.id,
+          spawningThreadId: invocation.threadId,
+          spawningTurnId,
+          title: titleFromMessage(message),
+          modelSelection: caller.modelSelection,
+          runtimeMode: caller.runtimeMode,
+          interactionMode: caller.interactionMode,
+          branch,
+          worktreePath: createdWorktree,
           createdAt,
-        })
-        .pipe(
-          Effect.mapError(() =>
-            failTaskTool(operation, `Could not send a message to '${threadId}'.`),
+        };
+        const refreshedScope = yield* restore(requireActiveTaskMutationScope(operation));
+        if (refreshedScope.activeTurnId !== spawningTurnId) {
+          return yield* failTaskTool(
+            operation,
+            "The calling provider turn changed before the task thread could be created.",
+          );
+        }
+        // Dispatch and ownership registration are likewise one commit point.
+        yield* engine.dispatch(createCommand);
+        createdThread = true;
+
+        if (createdWorktree) {
+          yield* restore(
+            setup
+              .runForThread({
+                threadId,
+                projectId: targetProjectId,
+                projectCwd: project.workspaceRoot,
+                worktreePath: createdWorktree,
+              })
+              .pipe(
+                Effect.catch((cause) =>
+                  Effect.logWarning("Task thread setup script failed to launch", {
+                    threadId,
+                    cause,
+                  }),
+                ),
+              ),
+          );
+        }
+
+        yield* restore(
+          engine.dispatch({
+            type: "thread.turn.start",
+            commandId: commandId("turn"),
+            threadId,
+            message: {
+              messageId,
+              role: "user",
+              text: message,
+              attachments: [],
+            },
+            modelSelection: createCommand.modelSelection,
+            runtimeMode: createCommand.runtimeMode,
+            interactionMode: createCommand.interactionMode,
+            createdAt,
+          }),
+        );
+
+        const query = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+        yield* restore(
+          query.getShellSnapshot().pipe(
+            Effect.flatMap((snapshot) =>
+              taskWorkspace.prepare({
+                task: scope.task,
+                projects: snapshot.projects,
+                threads: snapshot.threads,
+              }),
+            ),
+            Effect.catch((cause) =>
+              Effect.logWarning("Failed to refresh task context after spawning thread", {
+                threadId,
+                cause,
+              }),
+            ),
           ),
         );
-      return { threadId, accepted: true };
-    }),
-  task_wait_for_threads: ({ threadIds, waitMs }) =>
-    Effect.gen(function* () {
-      const operation = "task.wait_for_threads";
-      const initial = yield* requireTaskScope(operation);
-      for (const threadId of threadIds) {
-        yield* requireTaskThread(initial, threadId, operation);
-      }
-      const boundedWait = Math.min(waitMs ?? DEFAULT_WAIT_MS, MAX_WAIT_MS);
-      if (boundedWait > 0) {
-        yield* Effect.sleep(`${boundedWait} millis`);
-      }
-      const refreshed = yield* requireTaskScope(operation);
-      const threads = yield* Effect.forEach(threadIds, (threadId) =>
-        requireTaskThread(refreshed, threadId, operation),
+
+        return {
+          threadId,
+          projectId: targetProjectId,
+          branch,
+          worktreePath: createdWorktree,
+        };
+      }),
+    );
+
+    return yield* program.pipe(
+      Effect.onExit((exit) => (Exit.isFailure(exit) ? cleanup : Effect.void)),
+      Effect.catchCause((cause) => {
+        const interruptionReasons = cause.reasons.filter(Cause.isInterruptReason);
+        if (interruptionReasons.length > 0) {
+          return Effect.failCause(Cause.fromReasons<never>(interruptionReasons));
+        }
+        const error = Cause.squash(cause);
+        return Effect.fail(
+          failTaskTool(
+            operation,
+            error instanceof Error ? error.message : "Could not spawn the task thread.",
+          ),
+        );
+      }),
+    );
+  }),
+  task_send_message: Effect.fn("TaskCoordinationToolkit.task_send_message")(function* ({
+    threadId,
+    message,
+  }) {
+    const operation = "task.send_message";
+    const scope = yield* requireActiveTaskMutationScope(operation);
+    const target = yield* requireTaskThread(scope, threadId, operation);
+    if (target.taskContext?.createdBy.kind !== "agent") {
+      return yield* failTaskTool(
+        operation,
+        "Follow-up messages may target only agent-created threads.",
       );
-      return {
-        threads: threads.map((thread) => ({
-          threadId: thread.id,
-          status: statusForThread(thread),
-        })),
-        timedOut: threads.some((thread) => statusForThread(thread) === "working"),
-      };
-    }),
-  task_create_pull_request: ({ threadId }) =>
-    Effect.gen(function* () {
+    }
+    if (target.latestTurn?.state === "running") {
+      return yield* failTaskTool(operation, `Thread '${threadId}' is still working.`);
+    }
+    const crypto = yield* Crypto.Crypto;
+    const uuid = yield* crypto.randomUUIDv4.pipe(
+      Effect.mapError(() => failTaskTool(operation, "Could not allocate message identifiers.")),
+    );
+    const createdAt = DateTime.formatIso(yield* DateTime.now);
+    const engine = yield* OrchestrationEngine.OrchestrationEngineService;
+    yield* engine
+      .dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make(`task:message:${uuid}`),
+        threadId,
+        message: {
+          messageId: MessageId.make(`task:message:${uuid}`),
+          role: "user",
+          text: message,
+          attachments: [],
+        },
+        modelSelection: target.modelSelection,
+        runtimeMode: target.runtimeMode,
+        interactionMode: target.interactionMode,
+        createdAt,
+      })
+      .pipe(
+        Effect.mapError(() =>
+          failTaskTool(operation, `Could not send a message to '${threadId}'.`),
+        ),
+      );
+    return { threadId, accepted: true };
+  }),
+  task_wait_for_threads: Effect.fn("TaskCoordinationToolkit.task_wait_for_threads")(function* ({
+    threadIds,
+    waitMs,
+  }) {
+    const operation = "task.wait_for_threads";
+    const initial = yield* requireTaskScope(operation);
+    for (const threadId of threadIds) {
+      yield* requireTaskThread(initial, threadId, operation);
+    }
+    const boundedWait = Math.min(waitMs ?? DEFAULT_WAIT_MS, MAX_WAIT_MS);
+    if (boundedWait > 0) {
+      yield* Effect.sleep(`${boundedWait} millis`);
+    }
+    const refreshed = yield* requireTaskScope(operation);
+    const threads = yield* Effect.forEach(threadIds, (threadId) =>
+      requireTaskThread(refreshed, threadId, operation),
+    );
+    return {
+      threads: threads.map((thread) => ({
+        threadId: thread.id,
+        status: statusForThread(thread),
+      })),
+      timedOut: threads.some((thread) => statusForThread(thread) === "working"),
+    };
+  }),
+  task_create_pull_request: Effect.fn("TaskCoordinationToolkit.task_create_pull_request")(
+    function* ({ threadId }) {
       const operation = "task.create_pull_request";
       const scope = yield* requireTaskScope(operation);
       const target = yield* requireTaskThread(scope, threadId, operation);
@@ -592,7 +599,8 @@ const handlers = {
         ...(result.pr.headBranch ? { headBranch: result.pr.headBranch } : {}),
         ...(result.pr.title ? { title: result.pr.title } : {}),
       };
-    }),
+    },
+  ),
 } satisfies Parameters<typeof TaskCoordinationToolkit.toLayer>[0];
 
 export const TaskCoordinationToolkitHandlersLive = TaskCoordinationToolkit.toLayer(handlers);

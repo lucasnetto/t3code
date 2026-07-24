@@ -343,11 +343,12 @@ const client = McpSchema.McpServerClient.of({
 const invocation = (
   capabilities: ReadonlySet<McpInvocationContext.McpCapability>,
   threadId = callerThreadId,
+  providerInstanceId = ProviderInstanceId.make("codex"),
 ) => ({
   environmentId,
   threadId,
   providerSessionId: "provider-session-task-tools",
-  providerInstanceId: ProviderInstanceId.make("codex"),
+  providerInstanceId,
   capabilities,
   issuedAt: 1,
   expiresAt: Number.MAX_SAFE_INTEGER,
@@ -1507,6 +1508,195 @@ it.effect("spawns a durable agent thread with the exact caller message", () => {
     }),
   ).pipe(Effect.provide(makeCoordinationTestLayer(dispatchedCommands)));
 });
+
+it.effect(
+  "inherits the exact active caller configuration instead of the target project default",
+  () => {
+    const dispatchedCommands: Array<import("@t3tools/contracts").OrchestrationCommand> = [];
+    const inheritedInstanceId = ProviderInstanceId.make("codex-work");
+    const inheritedModelSelection = {
+      instanceId: inheritedInstanceId,
+      model: "gpt-5.6-codex",
+    };
+    const inheritedCaller: OrchestrationThreadShell = {
+      ...caller,
+      modelSelection: inheritedModelSelection,
+      runtimeMode: "auto-review",
+      interactionMode: "plan",
+      session: caller.session
+        ? {
+            ...caller.session,
+            providerInstanceId: inheritedInstanceId,
+            runtimeMode: "auto-review",
+          }
+        : null,
+    };
+    const inheritanceQuery = {
+      ...query,
+      getThreadShellById: (threadId: ThreadId) =>
+        Effect.succeed(
+          Option.fromNullishOr(threadId === callerThreadId ? inheritedCaller : undefined),
+        ),
+      getShellSnapshot: () =>
+        query.getShellSnapshot().pipe(
+          Effect.map((snapshot) => ({
+            ...snapshot,
+            projects: snapshot.projects.map((project) =>
+              project.id === taskWorkspaceProjectId
+                ? {
+                    ...project,
+                    defaultModelSelection: {
+                      instanceId: ProviderInstanceId.make("claude-default"),
+                      model: "claude-opus-default",
+                    },
+                  }
+                : project,
+            ),
+            threads: [inheritedCaller],
+          })),
+        ),
+    } as unknown as ProjectionSnapshotQuery.ProjectionSnapshotQuery["Service"];
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const server = yield* McpServer.McpServer;
+        const result = yield* server
+          .callTool({
+            name: "task_spawn_thread",
+            arguments: { message: "Inherit the coordinator configuration exactly." },
+          })
+          .pipe(
+            Effect.provideService(
+              McpInvocationContext.McpInvocationContext,
+              invocation(new Set(["task"]), callerThreadId, inheritedInstanceId),
+            ),
+            Effect.provideService(McpSchema.McpServerClient, client),
+          );
+
+        expect(result.isError).toBe(false);
+        const create = dispatchedCommands.find((command) => command.type === "thread.agent.create");
+        const turn = dispatchedCommands.find((command) => command.type === "thread.turn.start");
+        expect(create).toMatchObject({
+          type: "thread.agent.create",
+          modelSelection: inheritedModelSelection,
+          runtimeMode: "auto-review",
+          interactionMode: "plan",
+        });
+        expect(turn).toMatchObject({
+          type: "thread.turn.start",
+          modelSelection: inheritedModelSelection,
+          runtimeMode: "auto-review",
+          interactionMode: "plan",
+        });
+      }),
+    ).pipe(Effect.provide(makeCoordinationTestLayer(dispatchedCommands, inheritanceQuery)));
+  },
+);
+
+it.effect(
+  "surfaces an unavailable inherited instance without falling back to the project default",
+  () => {
+    const dispatchedCommands: Array<import("@t3tools/contracts").OrchestrationCommand> = [];
+    const unavailableInstanceId = ProviderInstanceId.make("removed-provider");
+    const unavailableModelSelection = {
+      instanceId: unavailableInstanceId,
+      model: "removed-model",
+    };
+    const inheritedCaller: OrchestrationThreadShell = {
+      ...caller,
+      modelSelection: unavailableModelSelection,
+      session: caller.session
+        ? {
+            ...caller.session,
+            providerInstanceId: unavailableInstanceId,
+          }
+        : null,
+    };
+    const unavailableQuery = {
+      ...query,
+      getThreadShellById: (threadId: ThreadId) =>
+        Effect.succeed(
+          Option.fromNullishOr(threadId === callerThreadId ? inheritedCaller : undefined),
+        ),
+      getShellSnapshot: () =>
+        query.getShellSnapshot().pipe(
+          Effect.map((snapshot) => ({
+            ...snapshot,
+            projects: snapshot.projects.map((project) =>
+              project.id === taskWorkspaceProjectId
+                ? {
+                    ...project,
+                    defaultModelSelection: {
+                      instanceId: ProviderInstanceId.make("codex"),
+                      model: "available-default",
+                    },
+                  }
+                : project,
+            ),
+            threads: [inheritedCaller],
+          })),
+        ),
+    } as unknown as ProjectionSnapshotQuery.ProjectionSnapshotQuery["Service"];
+    const dispatch: OrchestrationEngine.OrchestrationEngineService["Service"]["dispatch"] = (
+      command,
+    ) => {
+      dispatchedCommands.push(command);
+      return command.type === "thread.turn.start"
+        ? Effect.fail(
+            new OrchestrationCommandInvariantError({
+              commandType: command.type,
+              detail: `Requested provider instance '${unavailableInstanceId}' is unavailable.`,
+            }),
+          )
+        : Effect.succeed({ sequence: dispatchedCommands.length });
+    };
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const server = yield* McpServer.McpServer;
+        const result = yield* server
+          .callTool({
+            name: "task_spawn_thread",
+            arguments: { message: "Do not substitute a default provider." },
+          })
+          .pipe(
+            Effect.provideService(
+              McpInvocationContext.McpInvocationContext,
+              invocation(new Set(["task"]), callerThreadId, unavailableInstanceId),
+            ),
+            Effect.provideService(McpSchema.McpServerClient, client),
+          );
+
+        expect(result.isError).toBe(true);
+        expect(toolErrorText(result)).toContain(
+          `Requested provider instance '${unavailableInstanceId}' is unavailable.`,
+        );
+        expect(dispatchedCommands.map((command) => command.type)).toEqual([
+          "thread.agent.create",
+          "thread.turn.start",
+          "thread.delete",
+        ]);
+        expect(dispatchedCommands[0]).toMatchObject({
+          type: "thread.agent.create",
+          modelSelection: unavailableModelSelection,
+        });
+        expect(dispatchedCommands[1]).toMatchObject({
+          type: "thread.turn.start",
+          modelSelection: unavailableModelSelection,
+        });
+      }),
+    ).pipe(
+      Effect.provide(
+        makeCoordinationTestLayer(
+          dispatchedCommands,
+          unavailableQuery,
+          {} as GitWorkflowService.GitWorkflowService["Service"],
+          dispatch,
+        ),
+      ),
+    );
+  },
+);
 
 it.effect("creates a pull request through the target thread checkout", () => {
   const dispatchedCommands: Array<import("@t3tools/contracts").OrchestrationCommand> = [];
