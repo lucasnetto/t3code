@@ -81,6 +81,7 @@ import {
   groupAgentThreadsForSidebarV2,
   hasUnseenCompletion,
   isTrailingDoubleClick,
+  orderVisibleSidebarV2Threads,
   resolveAdjacentThreadId,
   resolveSidebarV2Status,
   sortThreadsForSidebarV2,
@@ -895,7 +896,11 @@ export default function SidebarV2() {
   );
 
   const orderedThreads = useMemo(
-    () => [...activeThreads, ...visibleSettledThreads],
+    () =>
+      orderVisibleSidebarV2Threads({
+        activeThreads,
+        settledThreads: visibleSettledThreads,
+      }),
     [activeThreads, visibleSettledThreads],
   );
   const orderedThreadKeys = useMemo(

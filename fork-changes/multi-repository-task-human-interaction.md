@@ -35,9 +35,11 @@ are suppressed.
 
 Task threads are labeled in the sidebar. Agent-created children are indented
 and ordered directly after their spawning thread when that parent is visible,
-while user-created task threads remain peers. The lineage label names the
-spawning thread and exposes the durable spawning turn identifier to assistive
-technology and hover detail without including provider-specific internals.
+including when the two rows fall on opposite sides of Sidebar V2's active and
+settled presentation boundary, while user-created task threads remain peers.
+The lineage label names the spawning thread and exposes the durable spawning
+turn identifier to assistive technology and hover detail without including
+provider-specific internals.
 Both sidebar variants suppress inline/double-click rename, archive or
 settle/un-settle controls, destructive row actions, and destructive bulk
 actions for agent-created task threads. Mixed bulk selections fail closed to
@@ -49,5 +51,9 @@ task threads replace the composer with a read-only history banner and retain
 only emergency Stop while active. Model/runtime/interaction updates, connection
 editing, request responses, sends, terminals, project scripts, and Git mutation
 entry points are both hidden and guarded at their route callbacks. History and
-file inspection stay available; standalone and user-created task threads keep
-their existing controls.
+file inspection stay available. Mobile keeps an inspection-only Git entry for
+branch status, diffs, and an existing pull request while hiding and guarding
+Git mutations. Standalone and user-created task threads keep
+their existing controls. Mobile home, sidebar, settled, and archive rows also
+remove swipe and long-press lifecycle actions for agent-created task threads,
+with the shared command callbacks enforcing the same policy before dispatch.

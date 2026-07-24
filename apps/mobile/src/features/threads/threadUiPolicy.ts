@@ -7,8 +7,10 @@ export type MobileThreadUiAction =
   | "change-model"
   | "change-runtime"
   | "inspect-files"
+  | "inspect-git"
   | "inspect-history"
   | "mutate-git"
+  | "mutate-lifecycle"
   | "open-terminal"
   | "respond-to-request"
   | "run-project-script"
@@ -55,6 +57,7 @@ export function isMobileThreadUiActionAllowed(
 
   switch (action) {
     case "inspect-files":
+    case "inspect-git":
     case "inspect-history":
     case "stop":
       return true;
@@ -62,10 +65,28 @@ export function isMobileThreadUiActionAllowed(
     case "change-model":
     case "change-runtime":
     case "mutate-git":
+    case "mutate-lifecycle":
     case "open-terminal":
     case "respond-to-request":
     case "run-project-script":
     case "send-message":
       return false;
   }
+}
+
+/**
+ * Shared list/archive boundary for lifecycle controls. Callers should use this
+ * both when deciding whether to render mutation affordances and immediately
+ * before dispatching a command, so recycled or stale row callbacks fail closed.
+ */
+export function isMobileThreadListMutationAllowed(
+  thread: ThreadTaskContextCarrier | null | undefined,
+): boolean {
+  return isMobileThreadUiActionAllowed(resolveMobileThreadUiPolicy(thread), "mutate-lifecycle");
+}
+
+export function isMobileThreadGitMutationAllowed(
+  thread: ThreadTaskContextCarrier | null | undefined,
+): boolean {
+  return isMobileThreadUiActionAllowed(resolveMobileThreadUiPolicy(thread), "mutate-git");
 }

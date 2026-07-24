@@ -30,6 +30,7 @@ import { relativeTime } from "../../lib/time";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
 import { createNativeMailSearchToolbarItem } from "../layout/native-mail-search-toolbar";
+import { isMobileThreadListMutationAllowed } from "../threads/threadUiPolicy";
 import type { ArchivedThreadGroup, ArchivedThreadSortOrder } from "./archivedThreadList";
 
 export interface ArchivedThreadsHeaderEnvironment {
@@ -404,6 +405,67 @@ function ArchivedThreadRow(props: {
   const subtitle = [props.environmentLabel, props.thread.branch].filter((part): part is string =>
     Boolean(part),
   );
+  const mutationsAllowed = isMobileThreadListMutationAllowed(props.thread);
+  const row = (
+    <View
+      className="flex-row items-center gap-3 bg-card px-4 py-3"
+      style={{
+        borderBottomColor: separatorColor,
+        borderBottomWidth: props.isLast ? 0 : 1,
+      }}
+    >
+      <View className="h-[34px] w-[34px] items-center justify-center rounded-[11px] bg-subtle">
+        <SymbolView name="archivebox.fill" size={15} tintColor={iconColor} type="monochrome" />
+      </View>
+
+      <View className="min-w-0 flex-1 gap-1">
+        <View className="flex-row items-center gap-2">
+          <Text
+            className="min-w-0 flex-1 text-base font-t3-bold leading-snug text-foreground"
+            numberOfLines={1}
+          >
+            {props.thread.title}
+          </Text>
+          <Text className="min-w-[30px] text-right text-xs tabular-nums text-foreground-tertiary">
+            {timestamp}
+          </Text>
+        </View>
+        {subtitle.length > 0 ? (
+          <View className="flex-row items-center gap-1.5">
+            <SymbolView
+              name="arrow.triangle.branch"
+              size={10}
+              tintColor={iconColor}
+              type="monochrome"
+            />
+            <Text
+              className="min-w-0 flex-1 font-mono text-2xs text-foreground-tertiary"
+              numberOfLines={1}
+            >
+              {subtitle.join(" · ")}
+            </Text>
+          </View>
+        ) : null}
+      </View>
+    </View>
+  );
+
+  if (!mutationsAllowed) {
+    return (
+      <View
+        style={{
+          borderTopLeftRadius: props.isFirst ? 20 : 0,
+          borderTopRightRadius: props.isFirst ? 20 : 0,
+          borderBottomLeftRadius: props.isLast ? 20 : 0,
+          borderBottomRightRadius: props.isLast ? 20 : 0,
+          overflow: "hidden",
+        }}
+      >
+        {row}
+      </View>
+    );
+  }
+
   return (
     <ThreadSwipeable
       backgroundColor={cardColor}
@@ -429,49 +491,7 @@ function ArchivedThreadRow(props: {
       simultaneousWithExternalGesture={props.simultaneousSwipeGesture}
       threadTitle={props.thread.title}
     >
-      {() => (
-        <View
-          className="flex-row items-center gap-3 bg-card px-4 py-3"
-          style={{
-            borderBottomColor: separatorColor,
-            borderBottomWidth: props.isLast ? 0 : 1,
-          }}
-        >
-          <View className="h-[34px] w-[34px] items-center justify-center rounded-[11px] bg-subtle">
-            <SymbolView name="archivebox.fill" size={15} tintColor={iconColor} type="monochrome" />
-          </View>
-
-          <View className="min-w-0 flex-1 gap-1">
-            <View className="flex-row items-center gap-2">
-              <Text
-                className="min-w-0 flex-1 text-base font-t3-bold leading-snug text-foreground"
-                numberOfLines={1}
-              >
-                {props.thread.title}
-              </Text>
-              <Text className="min-w-[30px] text-right text-xs tabular-nums text-foreground-tertiary">
-                {timestamp}
-              </Text>
-            </View>
-            {subtitle.length > 0 ? (
-              <View className="flex-row items-center gap-1.5">
-                <SymbolView
-                  name="arrow.triangle.branch"
-                  size={10}
-                  tintColor={iconColor}
-                  type="monochrome"
-                />
-                <Text
-                  className="min-w-0 flex-1 font-mono text-2xs text-foreground-tertiary"
-                  numberOfLines={1}
-                >
-                  {subtitle.join(" · ")}
-                </Text>
-              </View>
-            ) : null}
-          </View>
-        </View>
-      )}
+      {() => row}
     </ThreadSwipeable>
   );
 }

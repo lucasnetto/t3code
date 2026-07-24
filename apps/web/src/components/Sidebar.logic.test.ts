@@ -16,6 +16,7 @@ import {
   hasUnseenCompletion,
   isContextMenuPointerDown,
   isTrailingDoubleClick,
+  orderVisibleSidebarV2Threads,
   orderItemsByPreferredIds,
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadSeedContext,
@@ -858,6 +859,57 @@ describe("groupAgentThreadsForSidebarV2", () => {
     ]);
 
     expect(grouped.map((thread) => thread.id)).toEqual(["child", "peer"]);
+  });
+});
+
+describe("orderVisibleSidebarV2Threads", () => {
+  const taskThread = (input: {
+    id: string;
+    taskId: string;
+    parentThreadId?: string;
+    environmentId?: string;
+  }) => ({
+    id: input.id,
+    environmentId: input.environmentId ?? "environment-local",
+    taskContext: {
+      taskId: input.taskId,
+      createdBy:
+        input.parentThreadId === undefined
+          ? ({ kind: "user" } as const)
+          : ({ kind: "agent", threadId: input.parentThreadId } as const),
+    },
+  });
+
+  it("keeps visible creators and children adjacent across active and settled partitions", () => {
+    const ordered = orderVisibleSidebarV2Threads({
+      activeThreads: [
+        taskThread({ id: "active-parent", taskId: "task-1" }),
+        taskThread({
+          id: "active-child",
+          taskId: "task-1",
+          parentThreadId: "settled-parent",
+        }),
+        taskThread({ id: "active-peer", taskId: "task-1" }),
+      ],
+      settledThreads: [
+        taskThread({ id: "settled-parent", taskId: "task-1" }),
+        taskThread({
+          id: "settled-child",
+          taskId: "task-1",
+          parentThreadId: "active-parent",
+        }),
+        taskThread({ id: "settled-peer", taskId: "task-1" }),
+      ],
+    });
+
+    expect(ordered.map((thread) => thread.id)).toEqual([
+      "active-parent",
+      "settled-child",
+      "active-peer",
+      "settled-parent",
+      "active-child",
+      "settled-peer",
+    ]);
   });
 });
 

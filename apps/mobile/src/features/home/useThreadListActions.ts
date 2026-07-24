@@ -12,6 +12,7 @@ import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { isMobileThreadListMutationAllowed } from "../threads/threadUiPolicy";
 
 /** Version skew: never send settle/unsettle to a server that predates them
     (capability defaults false on decode for older servers). */
@@ -65,6 +66,10 @@ function useThreadActionExecutor(
 
   const executeAction = useCallback(
     async (action: ThreadListAction, thread: EnvironmentThreadShell) => {
+      if (!isMobileThreadListMutationAllowed(thread)) {
+        return false;
+      }
+
       const key = scopedThreadKey(thread.environmentId, thread.id);
       if (inFlightThreadKeys.current.has(key)) {
         return false;
@@ -159,6 +164,10 @@ function useConfirmDeleteThread(
 ) {
   return useCallback(
     (thread: EnvironmentThreadShell) => {
+      if (!isMobileThreadListMutationAllowed(thread)) {
+        return;
+      }
+
       const title = "Delete thread?";
       const message = `“${thread.title}” will be permanently deleted, including its terminal history.`;
       if (process.env.EXPO_OS === "ios") {

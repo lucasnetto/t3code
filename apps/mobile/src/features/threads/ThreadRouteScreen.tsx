@@ -335,7 +335,7 @@ function ThreadRouteContent(
   const gitActionProgress = useGitActionProgress(gitActionProgressTarget);
 
   const handleOpenGitInspector = useCallback(() => {
-    if (!isMobileThreadUiActionAllowed(threadUiPolicy, "mutate-git")) {
+    if (!isMobileThreadUiActionAllowed(threadUiPolicy, "inspect-git")) {
       return;
     }
     if (!fileInspector.supported) {
@@ -739,7 +739,7 @@ function ThreadRouteContent(
         onPress: () => handleOpenTerminal(null),
       });
     }
-    if (!threadUiReadOnly) {
+    if (isMobileThreadUiActionAllowed(threadUiPolicy, "inspect-git")) {
       actions.push({
         accessibilityLabel: "Open git controls",
         icon: "point.topleft.down.curvedto.point.bottomright.up",
@@ -763,6 +763,7 @@ function ThreadRouteContent(
     props.onReturnToThread,
     selectedThreadCwd,
     selectedThreadProject?.workspaceRoot,
+    threadUiPolicy,
     threadUiReadOnly,
   ]);
 
@@ -783,21 +784,6 @@ function ThreadRouteContent(
     [navigation],
   );
 
-  if (!environmentId || !threadId) {
-    return <OpeningThreadLoadingScreen />;
-  }
-
-  if (!selectedThread) {
-    return <OpeningThreadLoadingScreen />;
-  }
-
-  const contentPresentation = projectThreadContentPresentation({
-    hasDetail: selectedThreadDetail !== null,
-    detailError: Option.getOrNull(selectedThreadDetailState.error),
-    detailDeleted: selectedThreadDetailState.status === "deleted",
-    connectionState: routeConnectionState,
-  });
-  const serverConfig = routeEnvironmentRuntime?.serverConfig ?? null;
   const handleSendMessage = useCallback(() => {
     if (!isMobileThreadUiActionAllowed(threadUiPolicy, "send-message")) {
       return Promise.resolve(null);
@@ -864,6 +850,22 @@ function ThreadRouteContent(
     }
     return requests.onSubmitUserInput();
   }, [requests.onSubmitUserInput, threadUiPolicy]);
+
+  if (!environmentId || !threadId) {
+    return <OpeningThreadLoadingScreen />;
+  }
+
+  if (!selectedThread) {
+    return <OpeningThreadLoadingScreen />;
+  }
+
+  const contentPresentation = projectThreadContentPresentation({
+    hasDetail: selectedThreadDetail !== null,
+    detailError: Option.getOrNull(selectedThreadDetailState.error),
+    detailDeleted: selectedThreadDetailState.status === "deleted",
+    connectionState: routeConnectionState,
+  });
+  const serverConfig = routeEnvironmentRuntime?.serverConfig ?? null;
   const renderThreadRouteBody = (showActionControls: boolean) => (
     <>
       <ThreadGitControls {...threadGitControlProps} showActionControls={showActionControls} />
