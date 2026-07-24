@@ -1,8 +1,10 @@
 import {
   EnvironmentId,
   ProjectId,
+  TaskId,
   ThreadId,
   type ScopedProjectRef,
+  type ScopedTaskRef,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
@@ -15,6 +17,17 @@ export class InvalidScopedProjectKeyError extends Schema.TaggedErrorClass<Invali
 ) {
   override get message(): string {
     return `Invalid scoped project atom key: ${JSON.stringify(this.key)}.`;
+  }
+}
+
+export class InvalidScopedTaskKeyError extends Schema.TaggedErrorClass<InvalidScopedTaskKeyError>()(
+  "InvalidScopedTaskKeyError",
+  {
+    key: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Invalid scoped task atom key: ${JSON.stringify(this.key)}.`;
   }
 }
 
@@ -49,6 +62,10 @@ export function projectKey(ref: ScopedProjectRef): string {
   return `${ref.environmentId}\u0000${ref.projectId}`;
 }
 
+export function taskKey(ref: ScopedTaskRef): string {
+  return `${ref.environmentId}\u0000${ref.taskId}`;
+}
+
 export function threadKey(ref: ScopedThreadRef): string {
   return `${ref.environmentId}\u0000${ref.threadId}`;
 }
@@ -65,6 +82,17 @@ export function parseProjectKey(key: string): ScopedProjectRef {
   return {
     environmentId: EnvironmentId.make(key.slice(0, separator)),
     projectId: ProjectId.make(key.slice(separator + 1)),
+  };
+}
+
+export function parseTaskKey(key: string): ScopedTaskRef {
+  const separator = key.indexOf("\u0000");
+  if (separator < 0) {
+    throw new InvalidScopedTaskKeyError({ key });
+  }
+  return {
+    environmentId: EnvironmentId.make(key.slice(0, separator)),
+    taskId: TaskId.make(key.slice(separator + 1)),
   };
 }
 
@@ -102,6 +130,19 @@ export function projectRefsEqual(
       (ref, index) =>
         ref.environmentId === right[index]?.environmentId &&
         ref.projectId === right[index]?.projectId,
+    )
+  );
+}
+
+export function taskRefsEqual(
+  left: ReadonlyArray<ScopedTaskRef>,
+  right: ReadonlyArray<ScopedTaskRef>,
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every(
+      (ref, index) =>
+        ref.environmentId === right[index]?.environmentId && ref.taskId === right[index]?.taskId,
     )
   );
 }

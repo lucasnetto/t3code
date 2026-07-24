@@ -3,12 +3,17 @@ import type {
   OrchestrationMessage,
   OrchestrationProjectShell,
   OrchestrationShellSnapshot,
+  OrchestrationTask,
   OrchestrationThread,
   OrchestrationThreadShell,
   ThreadId,
 } from "@t3tools/contracts";
 
 export interface EnvironmentProject extends OrchestrationProjectShell {
+  readonly environmentId: EnvironmentId;
+}
+
+export interface EnvironmentTask extends OrchestrationTask {
   readonly environmentId: EnvironmentId;
 }
 
@@ -27,6 +32,10 @@ export function scopeProject(
   project: OrchestrationProjectShell,
 ): EnvironmentProject {
   return { ...project, environmentId };
+}
+
+export function scopeTask(environmentId: EnvironmentId, task: OrchestrationTask): EnvironmentTask {
+  return { ...task, environmentId };
 }
 
 export function scopeThreadShell(

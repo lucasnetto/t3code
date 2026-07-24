@@ -26,6 +26,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ResolvedKeybindingRule,
+  TaskId,
   ThreadId,
   WS_METHODS,
   WsRpcGroup,
@@ -706,6 +707,7 @@ const buildAppUnderTest = (options?: {
             }),
           getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
           getProjectShellById: () => Effect.succeed(Option.none()),
+          getTaskShellById: () => Effect.succeed(Option.none()),
           getThreadShellById: () => Effect.succeed(Option.none()),
           getThreadDetailById: () => Effect.succeed(Option.none()),
           getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
@@ -3724,6 +3726,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(response.environment.environmentId, testEnvironmentDescriptor.environmentId);
       assert.equal(response.auth.policy, "desktop-managed-local");
       assert.equal(response.shellResumeCompletionMarker, true);
+      assert.equal(response.taskShellEvents, true);
       assert.equal(response.threadResumeCompletionMarker, true);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
@@ -5617,6 +5620,197 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assertTrue(result.failure._tag === "OrchestrationGetSnapshotError");
       assertTrue(result.failure.cause instanceof Error);
       assert.include(result.failure.cause.message, projectionError.message);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("only includes task shell snapshot fields for clients that opt in", () =>
+    Effect.gen(function* () {
+      const now = "2026-01-01T00:00:00.000Z";
+      const task = {
+        id: TaskId.make("task-shell-compatibility"),
+        title: "Compatibility task",
+        status: "active" as const,
+        rootPath: "/tmp/tasks/task-shell-compatibility",
+        workspaceProjectId: ProjectId.make("project-task-shell-compatibility"),
+        approvedProjectIds: [],
+        createdAt: now,
+        updatedAt: now,
+        completedAt: null,
+      };
+
+      yield* buildAppUnderTest({
+        layers: {
+          projectionSnapshotQuery: {
+            getShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: 1,
+                tasks: [task],
+                projects: [],
+                threads: [],
+                updatedAt: now,
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const legacyItem = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeShell]({}).pipe(Stream.runHead),
+        ),
+      );
+      const optedInItem = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeShell]({
+            requestTaskEvents: true,
+          }).pipe(Stream.runHead),
+        ),
+      );
+
+      const legacySnapshot = Option.getOrThrow(legacyItem);
+      const optedInSnapshot = Option.getOrThrow(optedInItem);
+      assert.equal(legacySnapshot.kind, "snapshot");
+      assert.isFalse(legacySnapshot.kind === "snapshot" && "tasks" in legacySnapshot.snapshot);
+      assert.equal(optedInSnapshot.kind, "snapshot");
+      assert.deepEqual(
+        optedInSnapshot.kind === "snapshot" ? optedInSnapshot.snapshot.tasks : undefined,
+        [task],
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("only emits task shell stream events for clients that opt in", () =>
+    Effect.gen(function* () {
+      const now = "2026-01-01T00:00:00.000Z";
+      const task = {
+        id: TaskId.make("task-shell-event-compatibility"),
+        title: "Compatibility task",
+        status: "active" as const,
+        rootPath: "/tmp/tasks/task-shell-event-compatibility",
+        workspaceProjectId: ProjectId.make("project-task-shell-event-compatibility"),
+        approvedProjectIds: [],
+        createdAt: now,
+        updatedAt: now,
+        completedAt: null,
+      };
+      const taskCreatedEvent = {
+        sequence: 1,
+        eventId: EventId.make("event-task-shell-compatibility"),
+        aggregateKind: "task",
+        aggregateId: task.id,
+        occurredAt: now,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "task.created",
+        payload: {
+          taskId: task.id,
+          title: task.title,
+          status: task.status,
+          rootPath: task.rootPath,
+          workspaceProjectId: task.workspaceProjectId,
+          approvedProjectIds: task.approvedProjectIds,
+          createdAt: task.createdAt,
+          updatedAt: task.updatedAt,
+          completedAt: task.completedAt,
+        },
+      } satisfies Extract<OrchestrationEvent, { type: "task.created" }>;
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            latestSequence: Effect.succeed(1),
+            readEvents: () => Stream.make(taskCreatedEvent),
+          },
+          projectionSnapshotQuery: {
+            getShellSnapshot: () => Effect.die("task replay must not load the shell snapshot"),
+            getTaskShellById: () => Effect.succeed(Option.some(task)),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const legacyItems = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeShell]({
+            afterSequence: 0,
+            requestCompletionMarker: true,
+          }).pipe(Stream.take(1), Stream.runCollect),
+        ),
+      );
+      const optedInItems = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeShell]({
+            afterSequence: 0,
+            requestCompletionMarker: true,
+            requestTaskEvents: true,
+          }).pipe(Stream.take(2), Stream.runCollect),
+        ),
+      );
+
+      assert.deepEqual(Array.from(legacyItems), [{ kind: "synchronized" }]);
+      assert.equal(optedInItems[0]?.kind, "task-upserted");
+      assert.deepEqual(
+        optedInItems[0]?.kind === "task-upserted" ? optedInItems[0].task : undefined,
+        task,
+      );
+      assert.deepEqual(optedInItems[1], { kind: "synchronized" });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("skips a task upsert when its narrow projection row is not found", () =>
+    Effect.gen(function* () {
+      const taskId = TaskId.make("task-shell-event-missing");
+      const taskCreatedEvent = {
+        sequence: 1,
+        eventId: EventId.make("event-task-shell-missing"),
+        aggregateKind: "task",
+        aggregateId: taskId,
+        occurredAt: "2026-01-01T00:00:00.000Z",
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "task.created",
+        payload: {
+          taskId,
+          title: "Missing task",
+          status: "active",
+          rootPath: "/tmp/tasks/task-shell-event-missing",
+          workspaceProjectId: ProjectId.make("project-task-shell-event-missing"),
+          approvedProjectIds: [],
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          completedAt: null,
+        },
+      } satisfies Extract<OrchestrationEvent, { type: "task.created" }>;
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            latestSequence: Effect.succeed(1),
+            readEvents: () => Stream.make(taskCreatedEvent),
+          },
+          projectionSnapshotQuery: {
+            getShellSnapshot: () => Effect.die("task replay must not load the shell snapshot"),
+            getTaskShellById: () => Effect.succeed(Option.none()),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const items = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeShell]({
+            afterSequence: 0,
+            requestCompletionMarker: true,
+            requestTaskEvents: true,
+          }).pipe(Stream.take(1), Stream.runCollect),
+        ),
+      );
+
+      assert.deepEqual(Array.from(items), [{ kind: "synchronized" }]);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
