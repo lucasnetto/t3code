@@ -14,6 +14,9 @@ import {
   ProjectCreatedPayload,
   ProjectDeletedPayload,
   ProjectMetaUpdatedPayload,
+  TaskCreatedPayload,
+  TaskRepositoryApprovedPayload,
+  TaskUpdatedPayload,
   ThreadActivityAppendedPayload,
   ThreadArchivedPayload,
   ThreadCreatedPayload,
@@ -183,6 +186,7 @@ function compareThreadActivities(
 export function createEmptyReadModel(nowIso: string): OrchestrationReadModel {
   return {
     snapshotSequence: 0,
+    tasks: [],
     projects: [],
     threads: [],
     updatedAt: nowIso,
@@ -200,6 +204,68 @@ export function projectEvent(
   };
 
   switch (event.type) {
+    case "task.created":
+      return decodeForEvent(TaskCreatedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const tasks = nextBase.tasks ?? [];
+          const task = {
+            id: payload.taskId,
+            title: payload.title,
+            status: payload.status,
+            rootPath: payload.rootPath,
+            workspaceProjectId: payload.workspaceProjectId,
+            approvedProjectIds: payload.approvedProjectIds,
+            createdAt: payload.createdAt,
+            updatedAt: payload.updatedAt,
+            completedAt: payload.completedAt,
+          };
+          const existing = tasks.some((entry) => entry.id === task.id);
+          return {
+            ...nextBase,
+            tasks: existing
+              ? tasks.map((entry) => (entry.id === task.id ? task : entry))
+              : [...tasks, task],
+          };
+        }),
+      );
+
+    case "task.updated":
+      return decodeForEvent(TaskUpdatedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          tasks: (nextBase.tasks ?? []).map((task) =>
+            task.id === payload.taskId
+              ? {
+                  ...task,
+                  title: payload.title,
+                  updatedAt: payload.updatedAt,
+                }
+              : task,
+          ),
+        })),
+      );
+
+    case "task.repository-approved":
+      return decodeForEvent(
+        TaskRepositoryApprovedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          tasks: (nextBase.tasks ?? []).map((task) =>
+            task.id === payload.taskId
+              ? {
+                  ...task,
+                  approvedProjectIds: [...task.approvedProjectIds, payload.projectId],
+                  updatedAt: payload.updatedAt,
+                }
+              : task,
+          ),
+        })),
+      );
+
     case "project.created":
       return decodeForEvent(ProjectCreatedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {
@@ -213,6 +279,7 @@ export function projectEvent(
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             deletedAt: null,
+            ...(payload.visibility !== undefined ? { visibility: payload.visibility } : {}),
           };
 
           return {
@@ -295,6 +362,7 @@ export function projectEvent(
             activities: [],
             checkpoints: [],
             session: null,
+            ...(payload.taskContext !== undefined ? { taskContext: payload.taskContext } : {}),
           },
           event.type,
           "thread",

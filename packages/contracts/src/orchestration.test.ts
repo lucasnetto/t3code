@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import {
+  ClientOrchestrationCommand,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
   ModelSelection,
@@ -43,6 +44,7 @@ const decodeOrchestrationSession = Schema.decodeUnknownEffect(OrchestrationSessi
 const decodeOrchestrationTask = Schema.decodeUnknownEffect(OrchestrationTask);
 const decodeOrchestrationThread = Schema.decodeUnknownEffect(OrchestrationThread);
 const decodeOrchestrationThreadShell = Schema.decodeUnknownEffect(OrchestrationThreadShell);
+const decodeClientOrchestrationCommand = Schema.decodeUnknownEffect(ClientOrchestrationCommand);
 const encodeThreadCreatedPayload = Schema.encodeEffect(ThreadCreatedPayload);
 
 function getOptionValue(
@@ -55,6 +57,30 @@ const decodeThreadCreatedPayload = Schema.decodeUnknownEffect(ThreadCreatedPaylo
 const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationCommand);
 const decodeOrchestrationEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
 const decodeThreadMetaUpdatedPayload = Schema.decodeUnknownEffect(ThreadMetaUpdatedPayload);
+
+it.effect("keeps task.create internal to server orchestration", () =>
+  Effect.gen(function* () {
+    const taskCreate = {
+      type: "task.create",
+      commandId: "command-task-create",
+      taskId: "task-1",
+      title: "Coordinate release",
+      rootPath: "/tmp/t3/tasks/task-1",
+      workspaceProjectId: "project-task-1",
+      approvedProjectIds: ["project-api"],
+      createdAt: "2026-07-23T12:00:00.000Z",
+    };
+
+    const internal = yield* decodeOrchestrationCommand(taskCreate);
+    assert.strictEqual(internal.type, "task.create");
+    if (internal.type === "task.create") {
+      assert.strictEqual(internal.rootPath, "/tmp/t3/tasks/task-1");
+    }
+
+    const clientResult = yield* Effect.exit(decodeClientOrchestrationCommand(taskCreate));
+    assert.strictEqual(clientResult._tag, "Failure");
+  }),
+);
 
 it.effect("parses turn diff input when fromTurnCount <= toTurnCount", () =>
   Effect.gen(function* () {

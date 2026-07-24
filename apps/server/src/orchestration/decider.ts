@@ -12,13 +12,17 @@ import type * as PlatformError from "effect/PlatformError";
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import {
   listThreadsByProjectId,
+  requireActiveVisibleProject,
+  requireActiveTask,
   requireActiveProjectWorkspaceRootAbsent,
   requireProject,
   requireProjectAbsent,
+  requireTaskAbsent,
   requireThread,
   requireThreadArchived,
   requireThreadAbsent,
   requireThreadNotArchived,
+  requireVisibleProject,
 } from "./commandInvariants.ts";
 import { projectEvent } from "./projector.ts";
 
@@ -161,6 +165,142 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
   Crypto.Crypto
 > {
   switch (command.type) {
+    case "task.create": {
+      yield* requireTaskAbsent({
+        readModel,
+        command,
+        taskId: command.taskId,
+      });
+      yield* requireProjectAbsent({
+        readModel,
+        command,
+        projectId: command.workspaceProjectId,
+      });
+      yield* requireActiveProjectWorkspaceRootAbsent({
+        readModel,
+        command,
+        workspaceRoot: command.rootPath,
+      });
+
+      const approvedProjectIds = [...new Set(command.approvedProjectIds)];
+      if (approvedProjectIds.length !== command.approvedProjectIds.length) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Task '${command.taskId}' contains duplicate approved project ids.`,
+        });
+      }
+      if (approvedProjectIds.includes(command.workspaceProjectId)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Task '${command.taskId}' cannot approve its internal workspace project.`,
+        });
+      }
+      for (const projectId of approvedProjectIds) {
+        yield* requireActiveVisibleProject({
+          readModel,
+          command,
+          projectId,
+        });
+      }
+
+      return [
+        {
+          ...(yield* withEventBase({
+            aggregateKind: "project",
+            aggregateId: command.workspaceProjectId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "project.created",
+          payload: {
+            projectId: command.workspaceProjectId,
+            title: `${command.title} workspace`,
+            workspaceRoot: command.rootPath,
+            defaultModelSelection: null,
+            scripts: [],
+            createdAt: command.createdAt,
+            updatedAt: command.createdAt,
+            visibility: "internal-task",
+          },
+        },
+        {
+          ...(yield* withEventBase({
+            aggregateKind: "task",
+            aggregateId: command.taskId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "task.created",
+          payload: {
+            taskId: command.taskId,
+            title: command.title,
+            status: "active",
+            rootPath: command.rootPath,
+            workspaceProjectId: command.workspaceProjectId,
+            approvedProjectIds,
+            createdAt: command.createdAt,
+            updatedAt: command.createdAt,
+            completedAt: null,
+          },
+        },
+      ];
+    }
+
+    case "task.update": {
+      yield* requireActiveTask({
+        readModel,
+        command,
+        taskId: command.taskId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "task",
+          aggregateId: command.taskId,
+          occurredAt: command.updatedAt,
+          commandId: command.commandId,
+        })),
+        type: "task.updated",
+        payload: {
+          taskId: command.taskId,
+          title: command.title,
+          updatedAt: command.updatedAt,
+        },
+      };
+    }
+
+    case "task.repository.approve": {
+      const task = yield* requireActiveTask({
+        readModel,
+        command,
+        taskId: command.taskId,
+      });
+      yield* requireActiveVisibleProject({
+        readModel,
+        command,
+        projectId: command.projectId,
+      });
+      if (task.approvedProjectIds.includes(command.projectId)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Project '${command.projectId}' is already approved for task '${command.taskId}'.`,
+        });
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "task",
+          aggregateId: command.taskId,
+          occurredAt: command.approvedAt,
+          commandId: command.commandId,
+        })),
+        type: "task.repository-approved",
+        payload: {
+          taskId: command.taskId,
+          projectId: command.projectId,
+          updatedAt: command.approvedAt,
+        },
+      };
+    }
+
     case "project.create": {
       yield* requireProjectAbsent({
         readModel,
@@ -190,12 +330,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           scripts: [],
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
+          visibility: "visible",
         },
       };
     }
 
     case "project.meta.update": {
-      yield* requireProject({
+      yield* requireVisibleProject({
         readModel,
         command,
         projectId: command.projectId,
@@ -231,7 +372,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "project.delete": {
-      yield* requireProject({
+      yield* requireVisibleProject({
         readModel,
         command,
         projectId: command.projectId,
@@ -282,7 +423,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.create": {
-      yield* requireProject({
+      const project = yield* requireProject({
         readModel,
         command,
         projectId: command.projectId,
@@ -292,6 +433,40 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (command.taskId === undefined) {
+        if (project.visibility === "internal-task") {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Task workspace project '${project.id}' requires task-aware thread creation.`,
+          });
+        }
+      } else {
+        const task = yield* requireActiveTask({
+          readModel,
+          command,
+          taskId: command.taskId,
+        });
+        if (command.projectId === task.workspaceProjectId) {
+          if (project.deletedAt !== null) {
+            return yield* new OrchestrationCommandInvariantError({
+              commandType: command.type,
+              detail: `Task workspace project '${project.id}' is deleted.`,
+            });
+          }
+        } else {
+          yield* requireActiveVisibleProject({
+            readModel,
+            command,
+            projectId: command.projectId,
+          });
+          if (!task.approvedProjectIds.includes(command.projectId)) {
+            return yield* new OrchestrationCommandInvariantError({
+              commandType: command.type,
+              detail: `Project '${command.projectId}' is not approved for task '${command.taskId}'.`,
+            });
+          }
+        }
+      }
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -311,6 +486,128 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           worktreePath: command.worktreePath,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
+          ...(command.taskId !== undefined
+            ? {
+                taskContext: {
+                  taskId: command.taskId,
+                  createdBy: { kind: "user" as const },
+                },
+              }
+            : {}),
+        },
+      };
+    }
+
+    case "thread.agent.create": {
+      const project = yield* requireProject({
+        readModel,
+        command,
+        projectId: command.projectId,
+      });
+      yield* requireThreadAbsent({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const task = yield* requireActiveTask({
+        readModel,
+        command,
+        taskId: command.taskId,
+      });
+      const spawningThread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.spawningThreadId,
+      });
+      if (spawningThread.deletedAt !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Spawning thread '${command.spawningThreadId}' is deleted.`,
+        });
+      }
+      if (spawningThread.archivedAt !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Spawning thread '${command.spawningThreadId}' is archived.`,
+        });
+      }
+      if (spawningThread.settledOverride === "settled" || spawningThread.settledAt !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Spawning thread '${command.spawningThreadId}' is settled.`,
+        });
+      }
+      if (spawningThread.taskContext?.taskId !== command.taskId) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Spawning thread '${command.spawningThreadId}' is outside task '${command.taskId}'.`,
+        });
+      }
+      if (spawningThread.taskContext.createdBy.kind !== "user") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Spawning thread '${command.spawningThreadId}' must be user-created.`,
+        });
+      }
+      const spawningTurnIsActive =
+        spawningThread.latestTurn?.turnId === command.spawningTurnId &&
+        spawningThread.latestTurn.state === "running" &&
+        spawningThread.session?.threadId === command.spawningThreadId &&
+        spawningThread.session.status === "running" &&
+        spawningThread.session.activeTurnId === command.spawningTurnId;
+      if (!spawningTurnIsActive) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Spawning turn '${command.spawningTurnId}' is not the active turn for thread '${command.spawningThreadId}'.`,
+        });
+      }
+      if (command.projectId === task.workspaceProjectId) {
+        if (project.deletedAt !== null) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Task workspace project '${project.id}' is deleted.`,
+          });
+        }
+      } else {
+        yield* requireActiveVisibleProject({
+          readModel,
+          command,
+          projectId: command.projectId,
+        });
+        if (!task.approvedProjectIds.includes(command.projectId)) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Project '${command.projectId}' is not approved for task '${command.taskId}'.`,
+          });
+        }
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.created",
+        payload: {
+          threadId: command.threadId,
+          projectId: command.projectId,
+          title: command.title,
+          modelSelection: command.modelSelection,
+          runtimeMode: command.runtimeMode,
+          interactionMode: command.interactionMode,
+          branch: command.branch,
+          worktreePath: command.worktreePath,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+          taskContext: {
+            taskId: command.taskId,
+            createdBy: {
+              kind: "agent",
+              threadId: command.spawningThreadId,
+              turnId: command.spawningTurnId,
+            },
+          },
         },
       };
     }
