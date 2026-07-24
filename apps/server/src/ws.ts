@@ -626,12 +626,15 @@ const makeWsRpcLayer = (
 
       const toShellStreamEvent = (
         event: OrchestrationEvent,
+        requestTaskEvents: boolean,
       ): Effect.Effect<Option.Option<OrchestrationShellStreamEvent>, never, never> => {
         switch (event.type) {
           case "task.created":
           case "task.updated":
           case "task.repository-approved":
-            return taskUpsert(event.payload.taskId, event.sequence);
+            return requestTaskEvents
+              ? taskUpsert(event.payload.taskId, event.sequence)
+              : Effect.succeed(Option.none());
           case "project.created":
           case "project.meta-updated":
             return projectUpsertOrRemove(event.payload.projectId, event.sequence);
@@ -689,16 +692,22 @@ const makeWsRpcLayer = (
         taskId: TaskId,
         sequence: number,
       ): Effect.Effect<Option.Option<OrchestrationShellStreamEvent>, never, never> =>
-        retryShellProjectionRead("task", taskId, projectionSnapshotQuery.getShellSnapshot()).pipe(
+        retryShellProjectionRead(
+          "task",
+          taskId,
+          projectionSnapshotQuery.getTaskShellById(taskId),
+        ).pipe(
           Effect.map(
-            Option.flatMap((snapshot) =>
-              Option.fromNullishOr(snapshot.tasks?.find((task) => task.id === taskId)).pipe(
-                Option.map((nextTask) => ({
-                  kind: "task-upserted" as const,
-                  sequence,
-                  task: nextTask,
-                })),
-              ),
+            Option.flatMap((task) =>
+              Option.match(task, {
+                onNone: () => Option.none(),
+                onSome: (nextTask) =>
+                  Option.some({
+                    kind: "task-upserted" as const,
+                    sequence,
+                    task: nextTask,
+                  }),
+              }),
             ),
           ),
         );
@@ -786,6 +795,7 @@ const makeWsRpcLayer = (
       const SHELL_REFETCH_CONCURRENCY = 8;
       const coalesceShellEvents = (
         events: ReadonlyArray<OrchestrationEvent>,
+        requestTaskEvents: boolean,
       ): Effect.Effect<ReadonlyArray<OrchestrationShellStreamEvent>, never, never> =>
         Effect.gen(function* () {
           if (events.length === 0) {
@@ -798,9 +808,13 @@ const makeWsRpcLayer = (
           const survivors = Array.from(latestByAggregate.values()).sort(
             (left, right) => left.sequence - right.sequence,
           );
-          const shellEvents = yield* Effect.forEach(survivors, toShellStreamEvent, {
-            concurrency: SHELL_REFETCH_CONCURRENCY,
-          });
+          const shellEvents = yield* Effect.forEach(
+            survivors,
+            (event) => toShellStreamEvent(event, requestTaskEvents),
+            {
+              concurrency: SHELL_REFETCH_CONCURRENCY,
+            },
+          );
           return shellEvents.flatMap((option) => (Option.isSome(option) ? [option.value] : []));
         });
 
@@ -812,10 +826,11 @@ const makeWsRpcLayer = (
       const SHELL_COALESCE_MAX_CHUNK = 512;
       const coalesceShellStream = <E, R>(
         stream: Stream.Stream<OrchestrationEvent, E, R>,
+        requestTaskEvents: boolean,
       ): Stream.Stream<OrchestrationShellStreamEvent, E, R> =>
         stream.pipe(
           Stream.groupedWithin(SHELL_COALESCE_MAX_CHUNK, SHELL_COALESCE_WINDOW),
-          Stream.mapEffect(coalesceShellEvents),
+          Stream.mapEffect((events) => coalesceShellEvents(events, requestTaskEvents)),
           Stream.flatMap((items) => Stream.fromIterable(items)),
         );
 
@@ -828,6 +843,7 @@ const makeWsRpcLayer = (
       // batch at markers and coalesce only the event segments on either side.
       const coalesceShellLiveInputs = (
         inputs: ReadonlyArray<ShellLiveInput>,
+        requestTaskEvents: boolean,
       ): Effect.Effect<ReadonlyArray<OrchestrationShellStreamItem>, never, never> =>
         Effect.gen(function* () {
           const output: Array<OrchestrationShellStreamItem> = [];
@@ -839,21 +855,22 @@ const makeWsRpcLayer = (
               continue;
             }
 
-            output.push(...(yield* coalesceShellEvents(pendingEvents)));
+            output.push(...(yield* coalesceShellEvents(pendingEvents, requestTaskEvents)));
             pendingEvents = [];
             output.push({ kind: "synchronized" });
           }
 
-          output.push(...(yield* coalesceShellEvents(pendingEvents)));
+          output.push(...(yield* coalesceShellEvents(pendingEvents, requestTaskEvents)));
           return output;
         });
 
       const coalesceShellLiveStream = <E, R>(
         stream: Stream.Stream<ShellLiveInput, E, R>,
+        requestTaskEvents: boolean,
       ): Stream.Stream<OrchestrationShellStreamItem, E, R> =>
         stream.pipe(
           Stream.groupedWithin(SHELL_COALESCE_MAX_CHUNK, SHELL_COALESCE_WINDOW),
-          Stream.mapEffect(coalesceShellLiveInputs),
+          Stream.mapEffect((inputs) => coalesceShellLiveInputs(inputs, requestTaskEvents)),
           Stream.flatMap((items) => Stream.fromIterable(items)),
         );
 
@@ -1116,6 +1133,7 @@ const makeWsRpcLayer = (
           },
           settings,
           shellResumeCompletionMarker: true,
+          taskShellEvents: true,
           threadResumeCompletionMarker: true,
         };
       });
@@ -1247,6 +1265,7 @@ const makeWsRpcLayer = (
           observeRpcStreamEffect(
             ORCHESTRATION_WS_METHODS.subscribeShell,
             Effect.gen(function* () {
+              const requestTaskEvents = input.requestTaskEvents === true;
               // Coalesce the live shell stream per aggregate over a small window
               // so bursts of high-frequency events (streaming message deltas,
               // activity appends) collapse into a single shell refetch and never
@@ -1267,7 +1286,10 @@ const makeWsRpcLayer = (
                 ),
                 { startImmediately: true },
               );
-              const bufferedLiveStream = coalesceShellLiveStream(Stream.fromQueue(liveBuffer));
+              const bufferedLiveStream = coalesceShellLiveStream(
+                Stream.fromQueue(liveBuffer),
+                requestTaskEvents,
+              );
 
               const loadSnapshot = projectionSnapshotQuery.getShellSnapshot().pipe(
                 Effect.tapError((cause) =>
@@ -1280,6 +1302,16 @@ const makeWsRpcLayer = (
                       cause,
                     }),
                 ),
+                Effect.map((snapshot) =>
+                  requestTaskEvents
+                    ? snapshot
+                    : {
+                        snapshotSequence: snapshot.snapshotSequence,
+                        projects: snapshot.projects,
+                        threads: snapshot.threads,
+                        updatedAt: snapshot.updatedAt,
+                      },
+                ),
               );
 
               // Offer the completion marker into the same queue as live events.
@@ -1291,7 +1323,9 @@ const makeWsRpcLayer = (
                       Stream.fromEffect(
                         Queue.offer(liveBuffer, { kind: "synchronized" as const }).pipe(
                           Effect.andThen(Queue.takeAll(liveBuffer)),
-                          Effect.flatMap(coalesceShellLiveInputs),
+                          Effect.flatMap((inputs) =>
+                            coalesceShellLiveInputs(inputs, requestTaskEvents),
+                          ),
                         ),
                       ).pipe(Stream.flatMap((items) => Stream.fromIterable(items))),
                       bufferedLiveStream,
@@ -1327,6 +1361,7 @@ const makeWsRpcLayer = (
                   // cannot chase a moving event-store head or grow the live
                   // buffer indefinitely while waiting for an empty page.
                   orchestrationEngine.readEvents(afterSequence, replayGap),
+                  requestTaskEvents,
                 ).pipe(
                   Stream.mapError(
                     (cause) =>

@@ -180,10 +180,17 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     subscribeDynamic(
       ORCHESTRATION_WS_METHODS.subscribeShell,
       Effect.fn("EnvironmentShellState.makeSubscribeInput")(function* (session) {
-        const supportsCompletionMarker = yield* session.initialConfig.pipe(
-          Effect.map((config) => config.shellResumeCompletionMarker === true),
-          Effect.orElseSucceed(() => false),
+        const shellCapabilities = yield* session.initialConfig.pipe(
+          Effect.map((config) => ({
+            supportsCompletionMarker: config.shellResumeCompletionMarker === true,
+            supportsTaskEvents: config.taskShellEvents === true,
+          })),
+          Effect.orElseSucceed(() => ({
+            supportsCompletionMarker: false,
+            supportsTaskEvents: false,
+          })),
         );
+        const { supportsCompletionMarker, supportsTaskEvents } = shellCapabilities;
         yield* Ref.set(awaitingCompletion, supportsCompletionMarker);
         yield* setSynchronizing;
 
@@ -207,10 +214,14 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
           return {
             afterSequence: httpSnapshot.value.snapshotSequence,
             ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
+            ...(supportsTaskEvents ? { requestTaskEvents: true as const } : {}),
           };
         }
 
-        return supportsCompletionMarker ? { requestCompletionMarker: true as const } : {};
+        return {
+          ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
+          ...(supportsTaskEvents ? { requestTaskEvents: true as const } : {}),
+        };
       }),
       {
         onExpectedFailure: (cause) => setStreamError(Cause.squash(cause)),

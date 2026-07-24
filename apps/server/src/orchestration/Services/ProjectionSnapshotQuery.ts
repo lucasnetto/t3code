@@ -13,10 +13,12 @@ import type {
   OrchestrationProjectShell,
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
+  OrchestrationTask,
   OrchestrationThread,
   OrchestrationThreadDetailSnapshot,
   OrchestrationThreadShell,
   ProjectId,
+  TaskId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -121,6 +123,13 @@ export interface ProjectionSnapshotQueryShape {
   readonly getProjectShellById: (
     projectId: ProjectId,
   ) => Effect.Effect<Option.Option<OrchestrationProjectShell>, ProjectionRepositoryError>;
+
+  /**
+   * Read a single task shell row by id.
+   */
+  readonly getTaskShellById: (
+    taskId: TaskId,
+  ) => Effect.Effect<Option.Option<OrchestrationTask>, ProjectionRepositoryError>;
 
   /**
    * Read the earliest active thread for a project.

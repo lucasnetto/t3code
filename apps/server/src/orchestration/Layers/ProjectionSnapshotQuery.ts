@@ -24,6 +24,7 @@ import {
   type OrchestrationThreadShell,
   ModelSelection,
   ProjectId,
+  TaskId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Arr from "effect/Array";
@@ -120,6 +121,9 @@ const WorkspaceRootLookupInput = Schema.Struct({
 });
 const ProjectIdLookupInput = Schema.Struct({
   projectId: ProjectId,
+});
+const TaskIdLookupInput = Schema.Struct({
+  taskId: TaskId,
 });
 const ThreadIdLookupInput = Schema.Struct({
   threadId: ThreadId,
@@ -790,6 +794,27 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         FROM projection_projects
         WHERE project_id = ${projectId}
           AND deleted_at IS NULL
+        LIMIT 1
+      `,
+  });
+
+  const getTaskRowById = SqlSchema.findOneOption({
+    Request: TaskIdLookupInput,
+    Result: ProjectionTaskDbRowSchema,
+    execute: ({ taskId }) =>
+      sql`
+        SELECT
+          task_id AS "taskId",
+          title,
+          status,
+          root_path AS "rootPath",
+          workspace_project_id AS "workspaceProjectId",
+          approved_project_ids_json AS "approvedProjectIds",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt",
+          completed_at AS "completedAt"
+        FROM projection_tasks
+        WHERE task_id = ${taskId}
         LIMIT 1
       `,
   });
@@ -1956,6 +1981,17 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       ),
     );
 
+  const getTaskShellById: ProjectionSnapshotQueryShape["getTaskShellById"] = (taskId) =>
+    getTaskRowById({ taskId }).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getTaskShellById:query",
+          "ProjectionSnapshotQuery.getTaskShellById:decodeRow",
+        ),
+      ),
+      Effect.map(Option.map(mapTaskRow)),
+    );
+
   const getFirstActiveThreadIdByProjectId: ProjectionSnapshotQueryShape["getFirstActiveThreadIdByProjectId"] =
     (projectId) =>
       getFirstActiveThreadIdByProject({ projectId }).pipe(
@@ -2278,6 +2314,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getCounts,
     getActiveProjectByWorkspaceRoot,
     getProjectShellById,
+    getTaskShellById,
     getFirstActiveThreadIdByProjectId,
     getThreadCheckpointContext,
     getFullThreadDiffContext,

@@ -1595,6 +1595,88 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       ]);
     }),
   );
+
+  it.effect("reads one task without decoding unrelated malformed project rows", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`
+        INSERT INTO projection_tasks (
+          task_id,
+          title,
+          status,
+          root_path,
+          workspace_project_id,
+          approved_project_ids_json,
+          created_at,
+          updated_at,
+          completed_at
+        )
+        VALUES (
+          'task-narrow-shell',
+          'Narrow shell task',
+          'active',
+          '/tmp/t3/tasks/task-narrow-shell',
+          'project-task-shell',
+          '["project-approved"]',
+          '2026-07-23T13:00:00.000Z',
+          '2026-07-23T13:00:01.000Z',
+          NULL
+        )
+      `;
+
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id,
+          title,
+          workspace_root,
+          default_model_selection_json,
+          scripts_json,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        VALUES (
+          'project-malformed-unrelated',
+          'Malformed unrelated project',
+          '/tmp/project-malformed-unrelated',
+          'not-json',
+          '[]',
+          '2026-07-23T13:00:00.000Z',
+          '2026-07-23T13:00:00.000Z',
+          NULL
+        )
+      `;
+
+      const task = yield* snapshotQuery.getTaskShellById(TaskId.make("task-narrow-shell"));
+
+      assert.equal(task._tag, "Some");
+      if (task._tag === "Some") {
+        assert.deepStrictEqual(task.value, {
+          id: TaskId.make("task-narrow-shell"),
+          title: "Narrow shell task",
+          status: "active",
+          rootPath: "/tmp/t3/tasks/task-narrow-shell",
+          workspaceProjectId: ProjectId.make("project-task-shell"),
+          approvedProjectIds: [ProjectId.make("project-approved")],
+          createdAt: "2026-07-23T13:00:00.000Z",
+          updatedAt: "2026-07-23T13:00:01.000Z",
+          completedAt: null,
+        });
+      }
+    }),
+  );
+
+  it.effect("returns none when the requested task shell row does not exist", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+
+      const task = yield* snapshotQuery.getTaskShellById(TaskId.make("task-shell-missing"));
+
+      assert.equal(task._tag, "None");
+    }),
+  );
 });
 
 it.effect(
