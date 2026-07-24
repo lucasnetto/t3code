@@ -91,6 +91,7 @@ export type ThreadGitMenuProps = {
 };
 
 type ThreadGitControlsProps = ThreadGitMenuProps & {
+  readonly readOnly?: boolean;
   readonly auxiliaryPaneControl?: {
     readonly accessibilityLabel: string;
     readonly onPress: () => void;
@@ -393,16 +394,22 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
 export function useThreadGitRightHeaderItems(props: ThreadGitControlsProps): HeaderItems {
   const actionItems = useThreadGitHeaderActionItems(props);
   return useMemo(
-    () => [actionItems.git, actionItems.files, actionItems.terminal] as HeaderItems,
-    [actionItems],
+    () =>
+      (props.readOnly
+        ? [actionItems.files]
+        : [actionItems.git, actionItems.files, actionItems.terminal]) as HeaderItems,
+    [actionItems, props.readOnly],
   );
 }
 
 export function useThreadGitCenterHeaderItems(props: ThreadGitControlsProps): HeaderItems {
   const actionItems = useThreadGitHeaderActionItems(props);
   return useMemo(
-    () => [actionItems.files, actionItems.git, actionItems.terminal] as HeaderItems,
-    [actionItems],
+    () =>
+      (props.readOnly
+        ? [actionItems.files]
+        : [actionItems.files, actionItems.git, actionItems.terminal]) as HeaderItems,
+    [actionItems, props.readOnly],
   );
 }
 
@@ -424,7 +431,7 @@ export function ThreadGitControls(props: ThreadGitControlsProps) {
           separateBackground
         />
       ) : null}
-      {showActionControls ? (
+      {showActionControls && !props.readOnly ? (
         <NativeHeaderToolbar.Menu
           icon="terminal"
           disabled={!props.canOpenTerminal}
@@ -480,7 +487,7 @@ export function ThreadGitControls(props: ThreadGitControlsProps) {
           </NativeHeaderToolbar.MenuAction>
         </NativeHeaderToolbar.Menu>
       ) : null}
-      {showActionControls && props.showDirectFileControl ? (
+      {showActionControls && (props.showDirectFileControl || props.readOnly) ? (
         <NativeHeaderToolbar.Button
           accessibilityLabel="Open files"
           disabled={!props.canOpenFiles}
@@ -489,7 +496,7 @@ export function ThreadGitControls(props: ThreadGitControlsProps) {
           separateBackground
         />
       ) : null}
-      {showActionControls ? <ThreadGitMenu {...props} /> : null}
+      {showActionControls && !props.readOnly ? <ThreadGitMenu {...props} /> : null}
     </NativeHeaderToolbar>
   );
 }

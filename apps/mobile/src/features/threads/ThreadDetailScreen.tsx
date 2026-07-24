@@ -16,12 +16,13 @@ import type {
 } from "@t3tools/contracts";
 import * as Haptics from "expo-haptics";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Platform, View, type GestureResponderEvent } from "react-native";
+import { Platform, Pressable, View, type GestureResponderEvent } from "react-native";
 import { KeyboardController, KeyboardStickyView } from "react-native-keyboard-controller";
 import Animated, { FadeInDown, FadeOut } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import type { ComposerEditorHandle } from "../../components/ComposerEditor";
+import { AppText as Text } from "../../components/AppText";
 import type { StatusTone } from "../../components/StatusPill";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
 import { CHAT_CONTENT_MAX_WIDTH, type LayoutVariant } from "../../lib/layout";
@@ -69,6 +70,7 @@ export interface ThreadDetailScreenProps {
   readonly serverConfig: T3ServerConfig | null;
   readonly layoutVariant?: LayoutVariant;
   readonly usesAutomaticContentInsets?: boolean;
+  readonly readOnly?: boolean;
   readonly onHeaderMaterialVisibilityChange?: (visible: boolean) => void;
   readonly onOpenConnectionEditor: () => void;
   readonly onChangeDraftMessage: (value: string) => void;
@@ -200,7 +202,12 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     }
   })();
   const selectedThreadFeed = props.selectedThreadFeed;
-  const composerChrome = composerExpanded ? COMPOSER_EXPANDED_CHROME : COMPOSER_COLLAPSED_CHROME;
+  const readOnly = props.readOnly ?? false;
+  const composerChrome = readOnly
+    ? 76
+    : composerExpanded
+      ? COMPOSER_EXPANDED_CHROME
+      : COMPOSER_COLLAPSED_CHROME;
   const composerOverlapHeight = composerChrome + composerBottomInset;
   const estimatedOverlayHeight = composerOverlapHeight;
   // The overlay's measured height includes the home-indicator inset (the
@@ -377,8 +384,37 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
         <View className="flex-1" />
       )}
 
-      {/* Floating composer — sticks to keyboard via KeyboardStickyView */}
-      {showContent ? (
+      {/* Agent-created task threads retain history and emergency Stop, but
+          first-party mobile mutation controls stay hidden. */}
+      {showContent && readOnly ? (
+        <View
+          ref={composerOverlayRef}
+          pointerEvents="box-none"
+          className="absolute inset-x-0 bottom-0 px-4"
+          onLayout={onComposerLayout}
+          style={{ paddingBottom: composerBottomInset }}
+        >
+          <View
+            className="w-full max-w-[768px] self-center flex-row items-center gap-3 rounded-2xl border border-border bg-surface px-4 py-3"
+            style={{ borderCurve: "continuous" }}
+          >
+            <View className="min-w-0 flex-1">
+              <Text selectable className="text-sm font-t3-medium text-foreground">
+                Agent-created task thread
+              </Text>
+              <Text selectable className="text-xs text-foreground-muted">
+                Read-only history. Coordinate follow-ups from a user-created task thread.
+              </Text>
+            </View>
+            {props.selectedThread.session?.status === "running" ||
+            props.selectedThread.session?.status === "starting" ? (
+              <View>
+                <ThreadReadOnlyStopButton onPress={props.onStopThread} />
+              </View>
+            ) : null}
+          </View>
+        </View>
+      ) : showContent ? (
         <KeyboardStickyView
           style={{ position: "absolute", bottom: 0, left: 0, right: 0 }}
           offset={{ closed: 0, opened: 0 }}
@@ -451,3 +487,16 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     </View>
   );
 });
+
+function ThreadReadOnlyStopButton(props: { readonly onPress: () => void }) {
+  return (
+    <Pressable
+      accessibilityLabel="Stop"
+      accessibilityRole="button"
+      className="rounded-full bg-danger px-3 py-2 active:opacity-70"
+      onPress={props.onPress}
+    >
+      <Text className="text-xs font-t3-bold text-danger-foreground">Stop</Text>
+    </Pressable>
+  );
+}

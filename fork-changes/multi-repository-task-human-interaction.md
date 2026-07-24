@@ -34,9 +34,20 @@ decider invariants; only the first-party UI's agent-thread mutation affordances
 are suppressed.
 
 Task threads are labeled in the sidebar. Agent-created children are indented
-and show their spawning thread, while user-created task threads remain peers.
+and ordered directly after their spawning thread when that parent is visible,
+while user-created task threads remain peers. The lineage label names the
+spawning thread and exposes the durable spawning turn identifier to assistive
+technology and hover detail without including provider-specific internals.
 Both sidebar variants suppress inline/double-click rename, archive or
 settle/un-settle controls, destructive row actions, and destructive bulk
 actions for agent-created task threads. Mixed bulk selections fail closed to
 local unread-state changes only. Navigation, PR/status inspection, copied
 identifiers and paths, and other read-only row metadata remain available.
+
+The mobile thread route follows the same shell-derived policy. Agent-created
+task threads replace the composer with a read-only history banner and retain
+only emergency Stop while active. Model/runtime/interaction updates, connection
+editing, request responses, sends, terminals, project scripts, and Git mutation
+entry points are both hidden and guarded at their route callbacks. History and
+file inspection stay available; standalone and user-created task threads keep
+their existing controls.

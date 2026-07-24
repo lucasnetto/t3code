@@ -78,6 +78,7 @@ import {
   buildSidebarV2MultiSelectThreadContextMenuItems,
   buildSidebarV2ThreadContextMenuItems,
   firstValidTimestampMs,
+  groupAgentThreadsForSidebarV2,
   hasUnseenCompletion,
   isTrailingDoubleClick,
   resolveAdjacentThreadId,
@@ -103,6 +104,7 @@ import {
   useSidebar,
 } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
+import { AgentThreadLineage, agentThreadLineageLabel } from "./sidebar/AgentThreadLineage";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { TaskCreateDialog } from "./TaskCreateDialog";
 
@@ -138,6 +140,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   projectTitle: string | null;
   taskTitle: string | null;
   agentParentTitle: string | null;
+  agentParentTurnId: string | null;
   providerEntryByInstanceId: ReadonlyMap<string, ProviderInstanceEntry>;
   onThreadClick: (event: ReactMouseEvent, threadRef: ScopedThreadRef) => void;
   onThreadActivate: (threadRef: ScopedThreadRef) => void;
@@ -401,6 +404,10 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
     ) : null;
 
   if (variant === "slim") {
+    const agentLineageLabel =
+      props.agentParentTitle && props.agentParentTurnId
+        ? agentThreadLineageLabel(props.agentParentTitle, props.agentParentTurnId)
+        : null;
     return (
       <li
         data-thread-item
@@ -413,6 +420,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
           role="button"
           tabIndex={0}
           data-testid="sidebar-v2-row-slim"
+          title={agentLineageLabel ?? undefined}
           className={cn(rowClassName, "flex h-[34px] items-center gap-2.5 px-2.5")}
           onClick={handleClick}
           onDoubleClick={handleDoubleClick}
@@ -436,6 +444,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
             />
           </span>
           {title}
+          {agentLineageLabel ? <span className="sr-only">{agentLineageLabel}</span> : null}
           {/* The PR badge stays outside the hover-fading slot: it must
               remain visible AND clickable while the row is hovered. Only
               the time/jump label yields to the settle affordance. */}
@@ -568,10 +577,11 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
           </div>
           <div className="mt-1 flex min-w-0">{title}</div>
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground/65">
-            {props.agentParentTitle ? (
-              <span className="max-w-28 shrink-0 truncate">
-                Agent · from {props.agentParentTitle}
-              </span>
+            {props.agentParentTitle && props.agentParentTurnId ? (
+              <AgentThreadLineage
+                parentTitle={props.agentParentTitle}
+                turnId={props.agentParentTurnId}
+              />
             ) : props.taskTitle ? (
               <span className="max-w-28 shrink-0 truncate">Task</span>
             ) : null}
@@ -845,11 +855,13 @@ export default function SidebarV2() {
       }
     }
     return {
-      activeThreads: sortThreadsForSidebarV2(active),
-      settledThreads: settled.toSorted(
-        (left, right) =>
-          firstValidTimestampMs(right.latestUserMessageAt, right.updatedAt) -
-          firstValidTimestampMs(left.latestUserMessageAt, left.updatedAt),
+      activeThreads: groupAgentThreadsForSidebarV2(sortThreadsForSidebarV2(active)),
+      settledThreads: groupAgentThreadsForSidebarV2(
+        settled.toSorted(
+          (left, right) =>
+            firstValidTimestampMs(right.latestUserMessageAt, right.updatedAt) -
+            firstValidTimestampMs(left.latestUserMessageAt, left.updatedAt),
+        ),
       ),
     };
   }, [
@@ -1613,7 +1625,12 @@ export default function SidebarV2() {
                     thread.taskContext?.createdBy.kind === "agent"
                       ? (threadTitleByKey.get(
                           `${thread.environmentId}:${thread.taskContext.createdBy.threadId}`,
-                        ) ?? thread.taskContext.createdBy.threadId)
+                        ) ?? "Unknown thread")
+                      : null
+                  }
+                  agentParentTurnId={
+                    thread.taskContext?.createdBy.kind === "agent"
+                      ? thread.taskContext.createdBy.turnId
                       : null
                   }
                   providerEntryByInstanceId={providerEntryByInstanceId}
