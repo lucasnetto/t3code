@@ -13,6 +13,12 @@ existing setup script without waiting for its exit, and then starts the first
 provider turn. Failures compensate by removing any newly created worktree and
 thread without forcing dirty checkout deletion.
 
+The child inherits the active caller's provider-bound model selection, runtime
+mode, and interaction mode exactly. A target project's default model selection
+is intentionally ignored, including when the inherited provider instance is
+unavailable: the existing provider/session error is surfaced instead of
+silently moving the child to a configured default.
+
 Every operation rechecks the active task, caller lineage, target membership,
 and repository approval. Mutating operations additionally require the calling
 thread's projected provider session to be running with a non-null active turn
