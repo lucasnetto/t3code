@@ -32,6 +32,7 @@ import {
   type OrchestrationEvent,
   type OrchestrationShellStreamEvent,
   type OrchestrationShellStreamItem,
+  type OrchestrationThreadShell,
   type OrchestrationThreadStreamItem,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetSnapshotError,
@@ -884,13 +885,77 @@ const makeWsRpcLayer = (
         Effect.gen(function* () {
           const bootstrap = command.bootstrap;
           const { bootstrap: _bootstrap, ...finalTurnStartCommand } = command;
-          const taskId = bootstrap?.createThread?.taskId;
+          const taskId = bootstrap?.createTask?.taskId ?? bootstrap?.createThread?.taskId;
+          let createdTask = false;
           let createdThread = false;
           let targetProjectId = bootstrap?.createThread?.projectId;
           let targetProjectCwd = bootstrap?.prepareWorktree?.projectCwd;
           let targetWorktreePath = bootstrap?.createThread?.worktreePath ?? null;
           let createdWorktreePath: string | null = null;
           let createdBranch: GitVcsDriver.GitCreatedBranch | null = null;
+
+          const invalidBootstrap = (message: string, cause: Record<string, unknown>) =>
+            Effect.fail(
+              new OrchestrationDispatchCommandError({
+                message,
+                cause: {
+                  threadId: command.threadId,
+                  ...cause,
+                },
+              }),
+            );
+
+          const validateBootstrapShape = Effect.fn("WebSocket.validateThreadTurnStartBootstrap")(
+            function* () {
+              const createTask = bootstrap?.createTask;
+              const createThread = bootstrap?.createThread;
+              const prepareWorktree = bootstrap?.prepareWorktree;
+
+              if (createTask) {
+                if (
+                  !createThread ||
+                  createThread.taskId !== createTask.taskId ||
+                  createThread.projectId !== createTask.workspaceProjectId ||
+                  createThread.branch !== null ||
+                  createThread.worktreePath !== null
+                ) {
+                  return yield* invalidBootstrap(
+                    "Task bootstrap requires a matching task-root user thread.",
+                    { taskId: createTask.taskId },
+                  );
+                }
+                if (prepareWorktree) {
+                  return yield* invalidBootstrap(
+                    "Task-root bootstrap cannot prepare a repository worktree.",
+                    { taskId: createTask.taskId },
+                  );
+                }
+              }
+
+              if (prepareWorktree) {
+                if (
+                  !createThread ||
+                  createThread.worktreePath !== null ||
+                  createThread.branch !== prepareWorktree.baseBranch
+                ) {
+                  return yield* invalidBootstrap(
+                    "Worktree bootstrap requires a matching repository-bound thread.",
+                    {
+                      projectId: createThread?.projectId,
+                      baseBranch: prepareWorktree.baseBranch,
+                    },
+                  );
+                }
+              }
+
+              if (bootstrap?.runSetupScript === true && !prepareWorktree) {
+                return yield* invalidBootstrap(
+                  "Setup script bootstrap requires a worktree prepared by the same request.",
+                  {},
+                );
+              }
+            },
+          );
 
           const loadTaskWorkspaceContext = (taskId: TaskId) =>
             projectionSnapshotQuery.getShellSnapshot().pipe(
@@ -924,7 +989,7 @@ const makeWsRpcLayer = (
             );
 
           const cleanupCreatedThread = () =>
-            createdThread
+            createdThread && !createdTask
               ? serverCommandId("bootstrap-thread-delete").pipe(
                   Effect.flatMap((commandId) =>
                     orchestrationEngine.dispatch({
@@ -1143,50 +1208,181 @@ const makeWsRpcLayer = (
             });
 
           const bootstrapProgram = Effect.gen(function* () {
+            const createTask = bootstrap?.createTask;
+            const createThread = bootstrap?.createThread;
+            const prepareWorktree = bootstrap?.prepareWorktree;
+            yield* validateBootstrapShape();
+
+            if (createTask) {
+              // Retain the narrowing at the use site; the validator reports this
+              // before any task/thread/worktree side effect can run.
+              if (!createThread) {
+                return yield* invalidBootstrap(
+                  "Task bootstrap requires a matching task-root user thread.",
+                  { taskId: createTask.taskId },
+                );
+              }
+              const taskRoot = taskWorkspace.newTaskRoot(createTask.taskId);
+              const snapshot = yield* projectionSnapshotQuery
+                .getShellSnapshot()
+                .pipe(
+                  Effect.mapError((cause) =>
+                    toDispatchCommandError(cause, "Failed to reconcile task bootstrap state."),
+                  ),
+                );
+              const existingTask = snapshot.tasks?.find(
+                (candidate) => candidate.id === createTask.taskId,
+              );
+              const existingWorkspaceProject = snapshot.projects.find(
+                (candidate) => candidate.id === createTask.workspaceProjectId,
+              );
+              const existingThread = snapshot.threads.find(
+                (candidate) => candidate.id === command.threadId,
+              );
+
+              if (existingTask) {
+                const approvedProjectsMatch =
+                  existingTask.approvedProjectIds.length === createTask.approvedProjectIds.length &&
+                  existingTask.approvedProjectIds.every((projectId) =>
+                    createTask.approvedProjectIds.includes(projectId),
+                  );
+                const taskMatches =
+                  existingTask.title === createTask.title &&
+                  existingTask.status === "active" &&
+                  existingTask.rootPath === taskRoot &&
+                  existingTask.workspaceProjectId === createTask.workspaceProjectId &&
+                  approvedProjectsMatch &&
+                  existingTask.createdAt === createTask.createdAt &&
+                  existingTask.completedAt === null;
+                const workspaceProjectMatches =
+                  existingWorkspaceProject?.title === `${createTask.title} workspace` &&
+                  existingWorkspaceProject.workspaceRoot === taskRoot &&
+                  existingWorkspaceProject.visibility === "internal-task" &&
+                  existingWorkspaceProject.createdAt === createTask.createdAt;
+                const existingModelOptions = existingThread?.modelSelection.options ?? [];
+                const requestedModelOptions = createThread.modelSelection.options ?? [];
+                const modelSelectionMatches =
+                  existingThread?.modelSelection.instanceId ===
+                    createThread.modelSelection.instanceId &&
+                  existingThread.modelSelection.model === createThread.modelSelection.model &&
+                  existingModelOptions.length === requestedModelOptions.length &&
+                  existingModelOptions.every(
+                    (option, index) =>
+                      option.id === requestedModelOptions[index]?.id &&
+                      option.value === requestedModelOptions[index]?.value,
+                  );
+                const threadMatches =
+                  existingThread?.projectId === createTask.workspaceProjectId &&
+                  existingThread.title === createThread.title &&
+                  modelSelectionMatches &&
+                  existingThread.runtimeMode === createThread.runtimeMode &&
+                  existingThread.interactionMode === createThread.interactionMode &&
+                  existingThread.branch === null &&
+                  existingThread.worktreePath === null &&
+                  existingThread.latestTurn === null &&
+                  existingThread.updatedAt === existingThread.createdAt &&
+                  existingThread.archivedAt === null &&
+                  existingThread.settledOverride === null &&
+                  existingThread.settledAt === null &&
+                  existingThread.session === null &&
+                  existingThread.latestUserMessageAt === null &&
+                  !existingThread.hasPendingApprovals &&
+                  !existingThread.hasPendingUserInput &&
+                  !existingThread.hasActionableProposedPlan &&
+                  existingThread.taskContext?.taskId === createTask.taskId &&
+                  existingThread.taskContext.createdBy.kind === "user";
+
+                if (!taskMatches || !workspaceProjectMatches || !threadMatches) {
+                  return yield* new OrchestrationDispatchCommandError({
+                    message:
+                      "Task bootstrap identifiers collide with existing state that does not match this first-send request.",
+                    cause: {
+                      taskId: createTask.taskId,
+                      workspaceProjectId: createTask.workspaceProjectId,
+                      threadId: command.threadId,
+                    },
+                  });
+                }
+              } else {
+                if (existingWorkspaceProject || existingThread) {
+                  return yield* new OrchestrationDispatchCommandError({
+                    message:
+                      "Task bootstrap identifiers collide with existing state that is not owned by the requested task.",
+                    cause: {
+                      taskId: createTask.taskId,
+                      workspaceProjectId: createTask.workspaceProjectId,
+                      threadId: command.threadId,
+                    },
+                  });
+                }
+                yield* orchestrationEngine.dispatch({
+                  type: "task.create",
+                  commandId: yield* serverCommandId("bootstrap-task-create"),
+                  taskId: createTask.taskId,
+                  title: createTask.title,
+                  rootPath: taskRoot,
+                  workspaceProjectId: createTask.workspaceProjectId,
+                  approvedProjectIds: createTask.approvedProjectIds,
+                  initialThread: {
+                    threadId: command.threadId,
+                    title: createThread.title,
+                    modelSelection: createThread.modelSelection,
+                    runtimeMode: createThread.runtimeMode,
+                    interactionMode: createThread.interactionMode,
+                    createdAt: createThread.createdAt,
+                  },
+                  createdAt: createTask.createdAt,
+                });
+                createdTask = true;
+                createdThread = true;
+              }
+            }
             const taskContext = taskId ? yield* loadTaskWorkspaceContext(taskId) : null;
 
-            if (taskContext && bootstrap?.createThread && bootstrap.prepareWorktree) {
-              const projectId = bootstrap.createThread.projectId;
-              if (!taskContext.task.approvedProjectIds.includes(projectId)) {
-                return yield* new OrchestrationDispatchCommandError({
-                  message: `Project ${projectId} is not approved for task ${taskContext.task.id}.`,
-                  cause: {
-                    taskId: taskContext.task.id,
-                    projectId,
+            if (prepareWorktree && createThread) {
+              const project = taskContext
+                ? taskContext.projects.find((candidate) => candidate.id === createThread.projectId)
+                : (yield* projectionSnapshotQuery
+                    .getCommandReadModel()
+                    .pipe(
+                      Effect.mapError((cause) =>
+                        toDispatchCommandError(
+                          cause,
+                          "Failed to validate bootstrap repository context.",
+                        ),
+                      ),
+                    )).projects.find(
+                    (candidate) =>
+                      candidate.id === createThread.projectId && candidate.deletedAt === null,
+                  );
+              const taskApprovesProject =
+                !taskContext ||
+                (taskContext.task.status === "active" &&
+                  taskContext.task.approvedProjectIds.includes(createThread.projectId));
+              if (!project || !taskApprovesProject || project.visibility === "internal-task") {
+                return yield* invalidBootstrap(
+                  "Worktree bootstrap repository does not match the thread project and task context.",
+                  {
+                    projectId: createThread.projectId,
+                    taskId: createThread.taskId,
+                    projectCwd: prepareWorktree.projectCwd,
                   },
-                });
-              }
-              const project = taskContext.projects.find((candidate) => candidate.id === projectId);
-              if (!project) {
-                return yield* new OrchestrationDispatchCommandError({
-                  message: `Approved project ${projectId} is not active while preparing task ${taskContext.task.id}.`,
-                  cause: {
-                    taskId: taskContext.task.id,
-                    projectId,
-                  },
-                });
-              }
-              if (project.visibility === "internal-task") {
-                return yield* new OrchestrationDispatchCommandError({
-                  message: `Task workspace project ${projectId} cannot be used as a repository worktree source.`,
-                  cause: {
-                    taskId: taskContext.task.id,
-                    projectId,
-                  },
-                });
+                );
               }
               const projectedCwd = path.resolve(project.workspaceRoot.trim());
-              const compatibilityCwd = path.resolve(bootstrap.prepareWorktree.projectCwd.trim());
-              if (compatibilityCwd !== projectedCwd) {
-                return yield* new OrchestrationDispatchCommandError({
-                  message: `Repository workspace for project ${projectId} does not match the approved project projection.`,
-                  cause: {
-                    taskId: taskContext.task.id,
-                    projectId,
+              const providedCwd = path.resolve(prepareWorktree.projectCwd.trim());
+              if (providedCwd !== projectedCwd) {
+                return yield* invalidBootstrap(
+                  taskContext
+                    ? `Repository workspace for project ${createThread.projectId} does not match the approved project projection.`
+                    : "Worktree bootstrap repository does not match the thread project and task context.",
+                  {
+                    projectId: createThread.projectId,
+                    taskId: createThread.taskId,
                     projectedCwd,
-                    providedCwd: compatibilityCwd,
+                    providedCwd,
                   },
-                });
+                );
               }
               targetProjectCwd = project.workspaceRoot;
             }
@@ -1201,20 +1397,20 @@ const makeWsRpcLayer = (
                 );
             }
 
-            if (bootstrap?.createThread) {
+            if (createThread && !createTask) {
               yield* orchestrationEngine.dispatch({
                 type: "thread.create",
                 commandId: yield* serverCommandId("bootstrap-thread-create"),
                 threadId: command.threadId,
-                projectId: bootstrap.createThread.projectId,
-                title: bootstrap.createThread.title,
-                modelSelection: bootstrap.createThread.modelSelection,
-                runtimeMode: bootstrap.createThread.runtimeMode,
-                interactionMode: bootstrap.createThread.interactionMode,
-                branch: bootstrap.createThread.branch,
-                worktreePath: bootstrap.createThread.worktreePath,
-                ...(bootstrap.createThread.taskId ? { taskId: bootstrap.createThread.taskId } : {}),
-                createdAt: bootstrap.createThread.createdAt,
+                projectId: createThread.projectId,
+                title: createThread.title,
+                modelSelection: createThread.modelSelection,
+                runtimeMode: createThread.runtimeMode,
+                interactionMode: createThread.interactionMode,
+                branch: createThread.branch,
+                worktreePath: createThread.worktreePath,
+                ...(createThread.taskId ? { taskId: createThread.taskId } : {}),
+                createdAt: createThread.createdAt,
               });
               createdThread = true;
             }
@@ -1384,21 +1580,24 @@ const makeWsRpcLayer = (
             ORCHESTRATION_WS_METHODS.dispatchCommand,
             Effect.gen(function* () {
               const normalizedCommand = yield* normalizeDispatchCommand(command);
-              const shouldStopSessionAfterArchive =
+              const threadBeforeArchive =
                 normalizedCommand.type === "thread.archive"
                   ? yield* projectionSnapshotQuery
                       .getThreadShellById(normalizedCommand.threadId)
                       .pipe(
-                        Effect.map(
-                          Option.match({
-                            onNone: () => false,
-                            onSome: (thread) =>
-                              thread.session !== null && thread.session.status !== "stopped",
-                          }),
+                        Effect.mapError((cause) =>
+                          toDispatchCommandError(cause, "Failed to inspect thread before archive."),
                         ),
-                        Effect.orElseSucceed(() => false),
                       )
-                  : false;
+                  : undefined;
+              const shouldStopSessionAfterArchive =
+                threadBeforeArchive === undefined
+                  ? false
+                  : Option.match(threadBeforeArchive, {
+                      onNone: () => false,
+                      onSome: (thread) =>
+                        thread.session !== null && thread.session.status !== "stopped",
+                    });
               const result = yield* dispatchNormalizedCommand(normalizedCommand);
               if (normalizedCommand.type === "thread.archive") {
                 if (shouldStopSessionAfterArchive) {

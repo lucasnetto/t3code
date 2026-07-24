@@ -20,6 +20,7 @@ import {
   TerminalNotRunningError,
   type OrchestrationCommand,
   type OrchestrationEvent,
+  type ThreadTurnStartBootstrap,
   ORCHESTRATION_WS_METHODS,
   type PreviewEvent,
   ProjectId,
@@ -28,7 +29,6 @@ import {
   ResolvedKeybindingRule,
   TaskId,
   ThreadId,
-  TaskId,
   TurnId,
   WS_METHODS,
   WsRpcGroup,
@@ -47,6 +47,7 @@ import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
+import * as Encoding from "effect/Encoding";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
@@ -1558,6 +1559,379 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ipAddress: "127.0.0.1",
         userAgent: "undici",
       });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects invalid first-send bootstrap combinations before side effects", () =>
+    Effect.gen(function* () {
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const taskId = TaskId.make("task-bootstrap-shape");
+      const completedTaskId = TaskId.make("task-completed-bootstrap-shape");
+      const workspaceProjectId = ProjectId.make("project-task-bootstrap-shape");
+      const completedWorkspaceProjectId = ProjectId.make("project-completed-task-bootstrap-shape");
+      const unapprovedProjectId = ProjectId.make("project-unapproved-bootstrap-shape");
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+      const createWorktree = vi.fn(() =>
+        Effect.succeed({
+          worktree: {
+            refName: "t3code/bootstrap-shape",
+            path: "/tmp/bootstrap-shape-worktree",
+          },
+        }),
+      );
+      const fetchRemote = vi.fn(() => Effect.void);
+      const runForThread = vi.fn(() => Effect.succeed({ status: "no-script" as const }));
+      const refreshStatus = vi.fn(() =>
+        Effect.succeed({
+          isRepo: false,
+          hasPrimaryRemote: false,
+          isDefaultRef: false,
+          refName: null,
+          hasWorkingTreeChanges: false,
+          workingTree: { files: [], insertions: 0, deletions: 0 },
+          hasUpstream: false,
+          aheadCount: 0,
+          behindCount: 0,
+          pr: null,
+        }),
+      );
+
+      yield* buildAppUnderTest({
+        layers: {
+          gitVcsDriver: {
+            createWorktree,
+            fetchRemote,
+          },
+          vcsStatusBroadcaster: {
+            refreshStatus,
+          },
+          orchestrationEngine: {
+            dispatch: (candidate) =>
+              Effect.sync(() => {
+                dispatchedCommands.push(candidate);
+                return { sequence: dispatchedCommands.length };
+              }),
+            readEvents: () => Stream.empty,
+          },
+          projectSetupScriptRunner: {
+            runForThread,
+          },
+          projectionSnapshotQuery: {
+            getShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: 1,
+                tasks: [
+                  {
+                    id: taskId,
+                    title: "Bootstrap shape",
+                    status: "active",
+                    rootPath: "/tmp/bootstrap-shape-task",
+                    workspaceProjectId,
+                    approvedProjectIds: [defaultProjectId],
+                    createdAt,
+                    updatedAt: createdAt,
+                    completedAt: null,
+                  },
+                  {
+                    id: completedTaskId,
+                    title: "Completed bootstrap shape",
+                    status: "completed",
+                    rootPath: "/tmp/completed-bootstrap-shape-task",
+                    workspaceProjectId: completedWorkspaceProjectId,
+                    approvedProjectIds: [defaultProjectId],
+                    createdAt,
+                    updatedAt: createdAt,
+                    completedAt: createdAt,
+                  },
+                ],
+                projects: [
+                  {
+                    id: defaultProjectId,
+                    title: "Default Project",
+                    workspaceRoot: "/tmp/default-project",
+                    defaultModelSelection,
+                    scripts: [],
+                    createdAt,
+                    updatedAt: createdAt,
+                  },
+                  {
+                    id: unapprovedProjectId,
+                    title: "Unapproved Project",
+                    workspaceRoot: "/tmp/unapproved-project",
+                    defaultModelSelection,
+                    scripts: [],
+                    createdAt,
+                    updatedAt: createdAt,
+                  },
+                ],
+                threads: [],
+                updatedAt: createdAt,
+              }),
+          },
+        },
+      });
+
+      const taskRootThread = {
+        projectId: workspaceProjectId,
+        title: "Bootstrap shape",
+        modelSelection: defaultModelSelection,
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        branch: null,
+        worktreePath: null,
+        taskId,
+        createdAt,
+      };
+      const repositoryThread = {
+        projectId: defaultProjectId,
+        title: "Repository thread",
+        modelSelection: defaultModelSelection,
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        branch: "main",
+        worktreePath: null,
+        createdAt,
+      };
+      const createTask = {
+        taskId,
+        title: "Bootstrap shape",
+        workspaceProjectId,
+        approvedProjectIds: [defaultProjectId],
+        createdAt,
+      };
+      const prepareWorktree = {
+        projectCwd: "/tmp/default-project",
+        baseBranch: "main",
+        branch: "t3code/bootstrap-shape",
+      };
+      const invalidCases: ReadonlyArray<{
+        readonly name: string;
+        readonly bootstrap: ThreadTurnStartBootstrap;
+        readonly expectedMessage: string;
+      }> = [
+        {
+          name: "task without thread",
+          bootstrap: { createTask },
+          expectedMessage: "matching task-root",
+        },
+        {
+          name: "task with mismatched task id",
+          bootstrap: {
+            createTask,
+            createThread: {
+              ...taskRootThread,
+              taskId: TaskId.make("task-bootstrap-shape-other"),
+            },
+          },
+          expectedMessage: "matching task-root",
+        },
+        {
+          name: "task with mismatched workspace project",
+          bootstrap: {
+            createTask,
+            createThread: { ...taskRootThread, projectId: defaultProjectId },
+          },
+          expectedMessage: "matching task-root",
+        },
+        {
+          name: "task-root thread with branch",
+          bootstrap: {
+            createTask,
+            createThread: { ...taskRootThread, branch: "main" },
+          },
+          expectedMessage: "matching task-root",
+        },
+        {
+          name: "task-root thread with worktree",
+          bootstrap: {
+            createTask,
+            createThread: {
+              ...taskRootThread,
+              worktreePath: "/tmp/existing-worktree",
+            },
+          },
+          expectedMessage: "matching task-root",
+        },
+        {
+          name: "task-root with repository preparation",
+          bootstrap: {
+            createTask,
+            createThread: taskRootThread,
+            prepareWorktree,
+          },
+          expectedMessage: "cannot prepare",
+        },
+        {
+          name: "worktree preparation without thread",
+          bootstrap: { prepareWorktree },
+          expectedMessage: "repository-bound thread",
+        },
+        {
+          name: "worktree preparation for existing checkout",
+          bootstrap: {
+            createThread: {
+              ...repositoryThread,
+              worktreePath: "/tmp/existing-worktree",
+            },
+            prepareWorktree,
+          },
+          expectedMessage: "repository-bound thread",
+        },
+        {
+          name: "worktree preparation with mismatched base branch",
+          bootstrap: {
+            createThread: { ...repositoryThread, branch: "develop" },
+            prepareWorktree,
+          },
+          expectedMessage: "repository-bound thread",
+        },
+        {
+          name: "setup script without worktree preparation",
+          bootstrap: {
+            createThread: repositoryThread,
+            runSetupScript: true,
+          },
+          expectedMessage: "requires a worktree",
+        },
+        {
+          name: "standalone worktree with mismatched project cwd",
+          bootstrap: {
+            createThread: repositoryThread,
+            prepareWorktree: {
+              ...prepareWorktree,
+              projectCwd: "/tmp/not-the-project",
+            },
+          },
+          expectedMessage: "does not match",
+        },
+        {
+          name: "task worktree for unapproved project",
+          bootstrap: {
+            createThread: {
+              ...repositoryThread,
+              projectId: unapprovedProjectId,
+              taskId,
+            },
+            prepareWorktree: {
+              ...prepareWorktree,
+              projectCwd: "/tmp/unapproved-project",
+            },
+          },
+          expectedMessage: "does not match",
+        },
+        {
+          name: "task worktree with mismatched project cwd",
+          bootstrap: {
+            createThread: { ...repositoryThread, taskId },
+            prepareWorktree: {
+              ...prepareWorktree,
+              projectCwd: "/tmp/not-the-project",
+            },
+          },
+          expectedMessage: "does not match",
+        },
+        {
+          name: "worktree for completed task",
+          bootstrap: {
+            createThread: {
+              ...repositoryThread,
+              taskId: completedTaskId,
+            },
+            prepareWorktree,
+          },
+          expectedMessage: "does not match",
+        },
+      ];
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      for (const [index, invalidCase] of invalidCases.entries()) {
+        const result = yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+              type: "thread.turn.start",
+              commandId: CommandId.make(`cmd-invalid-bootstrap-${index}`),
+              threadId: ThreadId.make(`thread-invalid-bootstrap-${index}`),
+              message: {
+                messageId: MessageId.make(`msg-invalid-bootstrap-${index}`),
+                role: "user",
+                text: invalidCase.name,
+                attachments: [],
+              },
+              modelSelection: defaultModelSelection,
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              bootstrap: invalidCase.bootstrap,
+              createdAt,
+            }),
+          ).pipe(Effect.result),
+        );
+        assertTrue(result._tag === "Failure");
+        assert.include(result.failure.message, invalidCase.expectedMessage);
+      }
+
+      assert.deepEqual(dispatchedCommands, []);
+      assert.equal(createWorktree.mock.calls.length, 0);
+      assert.equal(fetchRemote.mock.calls.length, 0);
+      assert.equal(runForThread.mock.calls.length, 0);
+      assert.equal(refreshStatus.mock.calls.length, 0);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("accepts a standalone local-thread bootstrap without worktree preparation", () =>
+    Effect.gen(function* () {
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            dispatch: (candidate) =>
+              Effect.sync(() => {
+                dispatchedCommands.push(candidate);
+                return { sequence: dispatchedCommands.length };
+              }),
+            readEvents: () => Stream.empty,
+          },
+        },
+      });
+
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const response = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-standalone-local-bootstrap"),
+            threadId: ThreadId.make("thread-standalone-local-bootstrap"),
+            message: {
+              messageId: MessageId.make("msg-standalone-local-bootstrap"),
+              role: "user",
+              text: "hello",
+              attachments: [],
+            },
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            bootstrap: {
+              createThread: {
+                projectId: defaultProjectId,
+                title: "Standalone local",
+                modelSelection: defaultModelSelection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: "main",
+                worktreePath: "/tmp/default-project",
+                createdAt,
+              },
+            },
+            createdAt,
+          }),
+        ),
+      );
+
+      assert.equal(response.sequence, 2);
+      assert.deepEqual(
+        dispatchedCommands.map((candidate) => candidate.type),
+        ["thread.create", "thread.turn.start"],
+      );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -6684,6 +7058,28 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const dispatchedCommands: Array<OrchestrationCommand> = [];
       const now = "2026-01-01T00:00:00.000Z";
       let archived = false;
+      const getThreadShellById = vi.fn(() =>
+        Effect.sync(() => {
+          effects.push(`query:thread-shell:${archived ? "archived" : "active"}`);
+          return archived
+            ? Option.none()
+            : Option.some(
+                makeDefaultOrchestrationThreadShell({
+                  id: threadId,
+                  updatedAt: now,
+                  session: {
+                    threadId,
+                    status: "ready",
+                    providerName: "claudeAgent",
+                    runtimeMode: "full-access",
+                    activeTurnId: null,
+                    lastError: null,
+                    updatedAt: now,
+                  },
+                }),
+              );
+        }),
+      );
 
       yield* buildAppUnderTest({
         layers: {
@@ -6705,27 +7101,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               }),
           },
           projectionSnapshotQuery: {
-            getThreadShellById: () =>
-              Effect.sync(() => {
-                effects.push(`query:thread-shell:${archived ? "archived" : "active"}`);
-                return archived
-                  ? Option.none()
-                  : Option.some(
-                      makeDefaultOrchestrationThreadShell({
-                        id: threadId,
-                        updatedAt: now,
-                        session: {
-                          threadId,
-                          status: "ready",
-                          providerName: "claudeAgent",
-                          runtimeMode: "full-access",
-                          activeTurnId: null,
-                          lastError: null,
-                          updatedAt: now,
-                        },
-                      }),
-                    );
-              }),
+            getThreadShellById,
           },
         },
       });
@@ -6748,6 +7124,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         "dispatch:thread.session.stop",
         `terminal.close:${threadId}`,
       ]);
+      assert.equal(getThreadShellById.mock.calls.length, 1);
       assert.deepEqual(
         dispatchedCommands.map((command) => command.type),
         ["thread.archive", "thread.session.stop"],
@@ -7232,7 +7609,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                   createdAt,
                 },
                 prepareWorktree: {
-                  projectCwd: "/tmp/project",
+                  projectCwd: "/tmp/default-project",
                   baseBranch: "main",
                   branch: "t3code/bootstrap-refName",
                   startFromOrigin: true,
@@ -7256,18 +7633,18 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           ],
         );
         assert.deepEqual(createWorktree.mock.calls[0]?.[0], {
-          cwd: "/tmp/project",
+          cwd: "/tmp/default-project",
           refName: fetchedOriginCommit,
           newRefName: "t3code/bootstrap-refName",
           baseRefName: "main",
           path: null,
         });
         assert.deepEqual(fetchRemote.mock.calls[0]?.[0], {
-          cwd: "/tmp/project",
+          cwd: "/tmp/default-project",
           remoteName: "origin",
         });
         assert.deepEqual(resolveRemoteTrackingCommit.mock.calls[0]?.[0], {
-          cwd: "/tmp/project",
+          cwd: "/tmp/default-project",
           refName: "main",
           fallbackRemoteName: "origin",
         });
@@ -7279,7 +7656,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.deepEqual(runForThread.mock.calls[0]?.[0], {
           threadId: ThreadId.make("thread-bootstrap"),
           projectId: defaultProjectId,
-          projectCwd: "/tmp/project",
+          projectCwd: "/tmp/default-project",
           worktreePath: "/tmp/bootstrap-worktree",
         });
         assert.deepEqual(refreshStatus.mock.calls[0]?.[0], "/tmp/bootstrap-worktree");
@@ -7376,7 +7753,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 createdAt,
               },
               prepareWorktree: {
-                projectCwd: "/tmp/project",
+                projectCwd: "/tmp/default-project",
                 baseBranch: "main",
                 branch: "t3code/bootstrap-refName",
               },
@@ -7518,7 +7895,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const expectedWorktreePath = path.join(
         taskRoot,
         "worktrees",
-        "thread-task-bootstrap-t3-code-web",
+        `id-${Encoding.encodeBase64Url(threadId)}-t3-code-web`,
       );
       assert.deepEqual(createWorktree.mock.calls[0]?.[0], {
         cwd: "/tmp/project",
@@ -7648,6 +8025,488 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("creates the task and first user thread before starting provider execution", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const taskId = TaskId.make("task-first-send");
+      const workspaceProjectId = ProjectId.make("project-task-first-send");
+      const threadId = ThreadId.make("thread-task-first-send");
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatchedCommands.push(command);
+                return { sequence: dispatchedCommands.length };
+              }),
+            readEvents: () => Stream.empty,
+          },
+          projectionSnapshotQuery: {
+            getShellSnapshot: () =>
+              Effect.sync(() => {
+                const taskCommand = dispatchedCommands.find(
+                  (
+                    candidate,
+                  ): candidate is Extract<OrchestrationCommand, { type: "task.create" }> =>
+                    candidate.type === "task.create",
+                );
+                return {
+                  snapshotSequence: dispatchedCommands.length,
+                  tasks: taskCommand
+                    ? [
+                        {
+                          id: taskCommand.taskId,
+                          title: taskCommand.title,
+                          status: "active" as const,
+                          rootPath: taskCommand.rootPath,
+                          workspaceProjectId: taskCommand.workspaceProjectId,
+                          approvedProjectIds: taskCommand.approvedProjectIds,
+                          createdAt: taskCommand.createdAt,
+                          updatedAt: taskCommand.createdAt,
+                          completedAt: null,
+                        },
+                      ]
+                    : [],
+                  projects: [
+                    {
+                      id: defaultProjectId,
+                      title: "T3 Code Web",
+                      workspaceRoot: "/tmp/project",
+                      defaultModelSelection: null,
+                      scripts: [],
+                      createdAt,
+                      updatedAt: createdAt,
+                    },
+                    ...(taskCommand
+                      ? [
+                          {
+                            id: workspaceProjectId,
+                            title: "Coordinate release workspace",
+                            workspaceRoot: taskCommand.rootPath,
+                            defaultModelSelection: null,
+                            scripts: [],
+                            createdAt,
+                            updatedAt: createdAt,
+                            visibility: "internal-task" as const,
+                          },
+                        ]
+                      : []),
+                  ],
+                  threads: taskCommand?.initialThread
+                    ? [
+                        {
+                          id: taskCommand.initialThread.threadId,
+                          projectId: taskCommand.workspaceProjectId,
+                          title: taskCommand.initialThread.title,
+                          modelSelection: taskCommand.initialThread.modelSelection,
+                          runtimeMode: taskCommand.initialThread.runtimeMode,
+                          interactionMode: taskCommand.initialThread.interactionMode,
+                          branch: null,
+                          worktreePath: null,
+                          latestTurn: null,
+                          createdAt: taskCommand.initialThread.createdAt,
+                          updatedAt: taskCommand.initialThread.createdAt,
+                          archivedAt: null,
+                          settledOverride: null,
+                          settledAt: null,
+                          session: null,
+                          latestUserMessageAt: null,
+                          hasPendingApprovals: false,
+                          hasPendingUserInput: false,
+                          hasActionableProposedPlan: false,
+                          taskContext: {
+                            taskId: taskCommand.taskId,
+                            createdBy: { kind: "user" as const },
+                          },
+                        },
+                      ]
+                    : [],
+                  updatedAt: createdAt,
+                };
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const response = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-task-first-send"),
+            threadId,
+            message: {
+              messageId: MessageId.make("msg-task-first-send"),
+              role: "user",
+              text: "coordinate this release",
+              attachments: [],
+            },
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            bootstrap: {
+              createTask: {
+                taskId,
+                title: "Coordinate release",
+                workspaceProjectId,
+                approvedProjectIds: [defaultProjectId],
+                createdAt,
+              },
+              createThread: {
+                projectId: workspaceProjectId,
+                title: "Coordinate release",
+                modelSelection: defaultModelSelection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: null,
+                worktreePath: null,
+                taskId,
+                createdAt,
+              },
+            },
+            createdAt,
+          }),
+        ),
+      );
+
+      assert.equal(response.sequence, 2);
+      assert.deepEqual(
+        dispatchedCommands.map((command) => command.type),
+        ["task.create", "thread.turn.start"],
+      );
+      const taskCommand = dispatchedCommands[0];
+      assertTrue(taskCommand?.type === "task.create");
+      if (taskCommand?.type !== "task.create") {
+        return;
+      }
+      assert.equal(taskCommand.initialThread?.threadId, threadId);
+      assert.equal(taskCommand.initialThread?.title, "Coordinate release");
+      assert.equal(path.basename(taskCommand.rootPath), `id-${Encoding.encodeBase64Url(taskId)}`);
+      assert.equal(yield* fileSystem.exists(path.join(taskCommand.rootPath, "TASK.md")), true);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("resumes a matching durable task bootstrap after first-send turn failure", () =>
+    Effect.gen(function* () {
+      const taskId = TaskId.make("task-first-send-retry");
+      const workspaceProjectId = ProjectId.make("project-task-first-send-retry");
+      const threadId = ThreadId.make("thread-task-first-send-retry");
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+      let taskCreateCommand: Extract<OrchestrationCommand, { type: "task.create" }> | undefined;
+      let turnStartAttempts = 0;
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            dispatch: (candidate) => {
+              if (candidate.type === "thread.turn.start") {
+                turnStartAttempts += 1;
+                if (turnStartAttempts === 1) {
+                  return Effect.fail(
+                    new OrchestrationListenerCallbackError({
+                      listener: "domain-event",
+                      detail: "provider startup failed",
+                    }),
+                  );
+                }
+              }
+              return Effect.sync(() => {
+                dispatchedCommands.push(candidate);
+                if (candidate.type === "task.create") {
+                  taskCreateCommand = candidate;
+                }
+                return { sequence: dispatchedCommands.length };
+              });
+            },
+            readEvents: () => Stream.empty,
+          },
+          projectionSnapshotQuery: {
+            getShellSnapshot: () =>
+              Effect.sync(() => {
+                const taskCommand = taskCreateCommand;
+                return {
+                  snapshotSequence: dispatchedCommands.length,
+                  tasks: taskCommand
+                    ? [
+                        {
+                          id: taskCommand.taskId,
+                          title: taskCommand.title,
+                          status: "active" as const,
+                          rootPath: taskCommand.rootPath,
+                          workspaceProjectId: taskCommand.workspaceProjectId,
+                          approvedProjectIds: taskCommand.approvedProjectIds,
+                          createdAt: taskCommand.createdAt,
+                          updatedAt: taskCommand.createdAt,
+                          completedAt: null,
+                        },
+                      ]
+                    : [],
+                  projects: [
+                    {
+                      id: defaultProjectId,
+                      title: "T3 Code Web",
+                      workspaceRoot: "/tmp/project",
+                      defaultModelSelection: null,
+                      scripts: [],
+                      createdAt,
+                      updatedAt: createdAt,
+                    },
+                    ...(taskCommand
+                      ? [
+                          {
+                            id: taskCommand.workspaceProjectId,
+                            title: `${taskCommand.title} workspace`,
+                            workspaceRoot: taskCommand.rootPath,
+                            defaultModelSelection: null,
+                            scripts: [],
+                            createdAt: taskCommand.createdAt,
+                            updatedAt: taskCommand.createdAt,
+                            visibility: "internal-task" as const,
+                          },
+                        ]
+                      : []),
+                  ],
+                  threads: taskCommand?.initialThread
+                    ? [
+                        {
+                          id: taskCommand.initialThread.threadId,
+                          projectId: taskCommand.workspaceProjectId,
+                          title: taskCommand.initialThread.title,
+                          modelSelection: taskCommand.initialThread.modelSelection,
+                          runtimeMode: taskCommand.initialThread.runtimeMode,
+                          interactionMode: taskCommand.initialThread.interactionMode,
+                          branch: null,
+                          worktreePath: null,
+                          latestTurn: null,
+                          createdAt: taskCommand.initialThread.createdAt,
+                          updatedAt: taskCommand.initialThread.createdAt,
+                          archivedAt: null,
+                          settledOverride: null,
+                          settledAt: null,
+                          session: null,
+                          latestUserMessageAt: null,
+                          hasPendingApprovals: false,
+                          hasPendingUserInput: false,
+                          hasActionableProposedPlan: false,
+                          taskContext: {
+                            taskId: taskCommand.taskId,
+                            createdBy: { kind: "user" as const },
+                          },
+                        },
+                      ]
+                    : [],
+                  updatedAt: createdAt,
+                };
+              }),
+          },
+        },
+      });
+
+      const request = {
+        type: "thread.turn.start" as const,
+        commandId: CommandId.make("cmd-task-first-send-retry"),
+        threadId,
+        message: {
+          messageId: MessageId.make("msg-task-first-send-retry"),
+          role: "user" as const,
+          text: "coordinate this release",
+          attachments: [],
+        },
+        modelSelection: defaultModelSelection,
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        bootstrap: {
+          createTask: {
+            taskId,
+            title: "Coordinate retry",
+            workspaceProjectId,
+            approvedProjectIds: [defaultProjectId],
+            createdAt,
+          },
+          createThread: {
+            projectId: workspaceProjectId,
+            title: "Coordinate retry",
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access" as const,
+            interactionMode: "default" as const,
+            branch: null,
+            worktreePath: null,
+            taskId,
+            createdAt,
+          },
+        },
+        createdAt,
+      };
+      const wsUrl = yield* getWsServerUrl("/ws");
+
+      const firstResult = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand](request),
+        ).pipe(Effect.result),
+      );
+      assertTrue(firstResult._tag === "Failure");
+      assert.include(firstResult.failure.message, "provider startup failed");
+      assert.equal(
+        dispatchedCommands.filter((candidate) => candidate.type === "task.create").length,
+        1,
+      );
+      assertTrue(dispatchedCommands.every((candidate) => candidate.type !== "thread.delete"));
+
+      const retryResult = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand](request),
+        ),
+      );
+      assert.equal(retryResult.sequence, 2);
+      assert.equal(turnStartAttempts, 2);
+      assert.deepEqual(
+        dispatchedCommands.map((candidate) => candidate.type),
+        ["task.create", "thread.turn.start"],
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects first-send retry when durable task bootstrap state does not match", () =>
+    Effect.gen(function* () {
+      const taskId = TaskId.make("task-first-send-collision");
+      const workspaceProjectId = ProjectId.make("project-task-first-send-collision");
+      const threadId = ThreadId.make("thread-task-first-send-collision");
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            dispatch: (candidate) =>
+              Effect.sync(() => {
+                dispatchedCommands.push(candidate);
+                return { sequence: dispatchedCommands.length };
+              }),
+            readEvents: () => Stream.empty,
+          },
+          projectionSnapshotQuery: {
+            getShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: 1,
+                tasks: [
+                  {
+                    id: taskId,
+                    title: "Different durable task",
+                    status: "active",
+                    rootPath: "/tmp/different-task-root",
+                    workspaceProjectId,
+                    approvedProjectIds: [defaultProjectId],
+                    createdAt,
+                    updatedAt: createdAt,
+                    completedAt: null,
+                  },
+                ],
+                projects: [
+                  {
+                    id: defaultProjectId,
+                    title: "T3 Code Web",
+                    workspaceRoot: "/tmp/project",
+                    defaultModelSelection: null,
+                    scripts: [],
+                    createdAt,
+                    updatedAt: createdAt,
+                  },
+                  {
+                    id: workspaceProjectId,
+                    title: "Different durable task workspace",
+                    workspaceRoot: "/tmp/different-task-root",
+                    defaultModelSelection: null,
+                    scripts: [],
+                    createdAt,
+                    updatedAt: createdAt,
+                    visibility: "internal-task",
+                  },
+                ],
+                threads: [
+                  {
+                    id: threadId,
+                    projectId: workspaceProjectId,
+                    title: "Different durable task",
+                    modelSelection: defaultModelSelection,
+                    runtimeMode: "full-access",
+                    interactionMode: "default",
+                    branch: null,
+                    worktreePath: null,
+                    latestTurn: null,
+                    createdAt,
+                    updatedAt: createdAt,
+                    archivedAt: null,
+                    settledOverride: null,
+                    settledAt: null,
+                    session: null,
+                    latestUserMessageAt: null,
+                    hasPendingApprovals: false,
+                    hasPendingUserInput: false,
+                    hasActionableProposedPlan: false,
+                    taskContext: {
+                      taskId,
+                      createdBy: { kind: "user" },
+                    },
+                  },
+                ],
+                updatedAt: createdAt,
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-task-first-send-collision"),
+            threadId,
+            message: {
+              messageId: MessageId.make("msg-task-first-send-collision"),
+              role: "user",
+              text: "coordinate this release",
+              attachments: [],
+            },
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            bootstrap: {
+              createTask: {
+                taskId,
+                title: "Requested task",
+                workspaceProjectId,
+                approvedProjectIds: [defaultProjectId],
+                createdAt,
+              },
+              createThread: {
+                projectId: workspaceProjectId,
+                title: "Requested task",
+                modelSelection: defaultModelSelection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: null,
+                worktreePath: null,
+                taskId,
+                createdAt,
+              },
+            },
+            createdAt,
+          }),
+        ).pipe(Effect.result),
+      );
+
+      assertTrue(result._tag === "Failure");
+      assert.include(result.failure.message, "collide with existing state");
+      assert.deepEqual(dispatchedCommands, []);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("does not misattribute setup activity dispatch failures as setup launch failures", () =>
     Effect.gen(function* () {
       const dispatchedCommands: Array<OrchestrationCommand> = [];
@@ -7740,7 +8599,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 createdAt,
               },
               prepareWorktree: {
-                projectCwd: "/tmp/project",
+                projectCwd: "/tmp/default-project",
                 baseBranch: "main",
                 branch: "t3code/bootstrap-refName",
               },
@@ -7824,7 +8683,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 createdAt,
               },
               prepareWorktree: {
-                projectCwd: "/tmp/project",
+                projectCwd: "/tmp/default-project",
                 baseBranch: "main",
                 branch: "t3code/bootstrap-refName",
               },
@@ -7910,7 +8769,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 createdAt,
               },
               prepareWorktree: {
-                projectCwd: "/tmp/project",
+                projectCwd: "/tmp/default-project",
                 baseBranch: "main",
                 branch: "t3code/bootstrap-cleanup",
               },
@@ -7925,7 +8784,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assertTrue(result.failure._tag === "OrchestrationDispatchCommandError");
       assert.include(result.failure.message, "turn start exploded");
       assert.deepEqual(cleanupCreatedWorktree.mock.calls[0]?.[0], {
-        cwd: "/tmp/project",
+        cwd: "/tmp/default-project",
         path: "/tmp/bootstrap-cleanup-worktree",
         createdBranch: {
           refName: "t3code/bootstrap-cleanup",
@@ -7945,7 +8804,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const cleanupError = new GitCommandError({
         operation: "GitVcsDriver.removeWorktree",
         command: "git worktree remove",
-        cwd: "/tmp/project",
+        cwd: "/tmp/default-project",
         detail: "worktree contains modified files",
       });
       const cleanupCreatedWorktree = vi.fn(
@@ -8011,7 +8870,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 createdAt,
               },
               prepareWorktree: {
-                projectCwd: "/tmp/project",
+                projectCwd: "/tmp/default-project",
                 baseBranch: "main",
                 branch: "t3code/bootstrap-cleanup-retained",
               },
@@ -8026,7 +8885,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assertTrue(result.failure._tag === "OrchestrationDispatchCommandError");
       assert.include(result.failure.message, "original turn start failure");
       assert.deepEqual(cleanupCreatedWorktree.mock.calls[0]?.[0], {
-        cwd: "/tmp/project",
+        cwd: "/tmp/default-project",
         path: "/tmp/bootstrap-cleanup-retained-worktree",
         createdBranch: {
           refName: "t3code/bootstrap-cleanup-retained",
@@ -8361,7 +9220,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 createdAt,
               },
               prepareWorktree: {
-                projectCwd: "/tmp/project",
+                projectCwd: "/tmp/default-project",
                 baseBranch: "main",
                 branch: "t3code/bootstrap-interrupted",
               },
@@ -8375,7 +9234,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assertTrue(result._tag === "Failure");
       assertTrue(result.failure._tag === "OrchestrationDispatchCommandError");
       assert.deepEqual(cleanupCreatedWorktree.mock.calls[0]?.[0], {
-        cwd: "/tmp/project",
+        cwd: "/tmp/default-project",
         path: "/tmp/bootstrap-interrupted-worktree",
         createdBranch: {
           refName: "t3code/bootstrap-interrupted",

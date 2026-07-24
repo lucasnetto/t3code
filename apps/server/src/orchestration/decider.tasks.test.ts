@@ -284,6 +284,54 @@ it.layer(NodeServices.layer)("task decider", (it) => {
     }),
   );
 
+  it.effect("atomically creates the first user task thread with the task", () =>
+    Effect.gen(function* () {
+      const base = yield* projectEvent(
+        createEmptyReadModel(now),
+        projectCreated(1, ProjectId.make("project-api"), "/tmp/api"),
+      );
+      const result = yield* decideOrchestrationCommand({
+        readModel: base,
+        command: {
+          type: "task.create",
+          commandId: CommandId.make("command-task-first-thread"),
+          taskId: TaskId.make("task-first-thread"),
+          title: "Coordinate release",
+          rootPath: "/tmp/t3/tasks/task-first-thread",
+          workspaceProjectId: ProjectId.make("project-task-first-thread"),
+          approvedProjectIds: [ProjectId.make("project-api")],
+          initialThread: {
+            threadId: ThreadId.make("thread-coordinator"),
+            title: "Coordinate release",
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("codex"),
+              model: "gpt-5.6",
+            },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt: now,
+          },
+          createdAt: now,
+        },
+      });
+      const events = Array.isArray(result) ? result : [result];
+
+      expect(events.map((event) => event.type)).toEqual([
+        "project.created",
+        "task.created",
+        "thread.created",
+      ]);
+      expect(events[2]?.payload).toMatchObject({
+        threadId: "thread-coordinator",
+        projectId: "project-task-first-thread",
+        taskContext: {
+          taskId: "task-first-thread",
+          createdBy: { kind: "user" },
+        },
+      });
+    }),
+  );
+
   it.effect("approves only active visible repositories", () =>
     Effect.gen(function* () {
       let readModel = yield* projectEvent(
