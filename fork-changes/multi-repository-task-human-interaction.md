@@ -34,9 +34,10 @@ decider invariants; only the first-party UI's agent-thread mutation affordances
 are suppressed.
 
 Task threads are labeled in the sidebar. Agent-created children are indented
-and ordered directly after their spawning thread when that parent is visible,
-including when the two rows fall on opposite sides of Sidebar V2's active and
-settled presentation boundary, while user-created task threads remain peers.
+and ordered directly after their spawning thread when both rows are in the
+same active or settled Sidebar V2 partition, while user-created task threads
+remain peers. Cross-partition lineage stays visible through the row label
+without interleaving the active and settled sections.
 The lineage label names the spawning thread and exposes the durable spawning
 turn identifier to assistive technology and hover detail without including
 provider-specific internals.

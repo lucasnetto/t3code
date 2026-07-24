@@ -629,15 +629,25 @@ export function groupAgentThreadsForSidebarV2<T extends SidebarV2TaskThread>(
 }
 
 /**
- * Preserves Sidebar V2's active-first presentation while applying lineage to
- * the final visible rows. Grouping the partitions independently can separate
- * a creator and child when one has settled and the other has not.
+ * Preserves Sidebar V2's single active/settled boundary while grouping visible
+ * lineage within each partition. Cross-partition lineage remains visible in
+ * row metadata, but does not interleave active and settled presentation.
  */
 export function orderVisibleSidebarV2Threads<T extends SidebarV2TaskThread>(input: {
   readonly activeThreads: readonly T[];
   readonly settledThreads: readonly T[];
 }): T[] {
-  return groupAgentThreadsForSidebarV2([...input.activeThreads, ...input.settledThreads]);
+  return [
+    ...groupAgentThreadsForSidebarV2(input.activeThreads),
+    ...groupAgentThreadsForSidebarV2(input.settledThreads),
+  ];
+}
+
+export function shouldRenderSidebarV2SettledDivider(input: {
+  readonly isSettledRow: boolean;
+  readonly previousIsSettledRow: boolean | null;
+}): boolean {
+  return input.isSettledRow && input.previousIsSettledRow === false;
 }
 
 export function resolveThreadStatusPill(input: {
