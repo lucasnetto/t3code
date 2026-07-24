@@ -25,6 +25,7 @@ import {
   resolveThreadRowClassName,
   resolveSidebarV2Status,
   resolveThreadStatusPill,
+  shouldRenderSidebarV2SettledDivider,
   shouldClearThreadSelectionOnMouseDown,
   sortThreadsForSidebarV2,
   sortProjectsForSidebar,
@@ -880,7 +881,7 @@ describe("orderVisibleSidebarV2Threads", () => {
     },
   });
 
-  it("keeps visible creators and children adjacent across active and settled partitions", () => {
+  it("keeps one active/settled boundary when lineage crosses both directions", () => {
     const ordered = orderVisibleSidebarV2Threads({
       activeThreads: [
         taskThread({ id: "active-parent", taskId: "task-1" }),
@@ -904,12 +905,24 @@ describe("orderVisibleSidebarV2Threads", () => {
 
     expect(ordered.map((thread) => thread.id)).toEqual([
       "active-parent",
-      "settled-child",
+      "active-child",
       "active-peer",
       "settled-parent",
-      "active-child",
+      "settled-child",
       "settled-peer",
     ]);
+
+    const settledIds = new Set(["settled-parent", "settled-child", "settled-peer"]);
+    const dividerIndexes = ordered.flatMap((thread, index) => {
+      return shouldRenderSidebarV2SettledDivider({
+        isSettledRow: settledIds.has(thread.id),
+        previousIsSettledRow: index === 0 ? null : settledIds.has(ordered[index - 1]?.id ?? ""),
+      })
+        ? [index]
+        : [];
+    });
+
+    expect(dividerIndexes).toEqual([3]);
   });
 });
 

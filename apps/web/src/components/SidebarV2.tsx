@@ -84,6 +84,7 @@ import {
   orderVisibleSidebarV2Threads,
   resolveAdjacentThreadId,
   resolveSidebarV2Status,
+  shouldRenderSidebarV2SettledDivider,
   sortThreadsForSidebarV2,
 } from "./Sidebar.logic";
 import { isAgentCreatedTaskThread } from "../lib/threadUiPolicy";
@@ -1586,12 +1587,18 @@ export default function SidebarV2() {
               // sidebar second-guessing what still matters.
               const isCard = !isSettledRow;
               const previousThread = threadIndex > 0 ? orderedThreads[threadIndex - 1] : null;
-              const previousWasCard =
-                previousThread != null &&
-                !settledThreadKeys.has(
-                  scopedThreadKey(scopeThreadRef(previousThread.environmentId, previousThread.id)),
-                );
-              const showSettledGap = !isCard && previousWasCard;
+              const previousIsSettledRow =
+                previousThread == null
+                  ? null
+                  : settledThreadKeys.has(
+                      scopedThreadKey(
+                        scopeThreadRef(previousThread.environmentId, previousThread.id),
+                      ),
+                    );
+              const showSettledGap = shouldRenderSidebarV2SettledDivider({
+                isSettledRow,
+                previousIsSettledRow,
+              });
               const row = (
                 <SidebarV2Row
                   // Keyed per variant on purpose: when a thread settles, the
