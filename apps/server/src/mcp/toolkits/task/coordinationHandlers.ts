@@ -2,8 +2,11 @@ import {
   CommandId,
   GitManagerError,
   MessageId,
+  ModelSelection,
   ProjectId,
+  ProviderInteractionMode,
   ThreadId,
+  TurnId,
   type OrchestrationCommand,
   type OrchestrationProjectShell,
   type OrchestrationThreadShell,
@@ -13,6 +16,7 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as GitManager from "../../../git/GitManager.ts";
@@ -20,6 +24,8 @@ import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
 import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as ProjectSetupScriptRunner from "../../../project/ProjectSetupScriptRunner.ts";
+import * as ProviderInstanceRegistry from "../../../provider/Services/ProviderInstanceRegistry.ts";
+import * as ProviderSessionDirectory from "../../../provider/Services/ProviderSessionDirectory.ts";
 import * as TaskWorkspaceService from "../../../tasks/TaskWorkspaceService.ts";
 import type { GitCreatedBranch } from "../../../vcs/GitVcsDriver.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -37,11 +43,69 @@ const DEFAULT_WAIT_MS = 1_000;
 const MAX_WAIT_MS = 10_000;
 const MAX_BASE_REF_PAGE_SIZE = 200;
 const isTaskToolError = Schema.is(TaskToolError);
+const ActiveProviderTurnPayload = Schema.Struct({
+  modelSelection: ModelSelection,
+  interactionMode: ProviderInteractionMode,
+  activeTurnId: TurnId,
+});
+const decodeActiveProviderTurnPayload = Schema.decodeUnknownEffect(ActiveProviderTurnPayload);
 
 function titleFromMessage(message: string): string {
   const firstLine = message.split(/\r?\n/, 1)[0]?.trim() || "Task thread";
   return firstLine.slice(0, 80);
 }
+
+const requireEffectiveCallerConfiguration = Effect.fn(
+  "TaskCoordinationToolkit.requireEffectiveCallerConfiguration",
+)(function* (operation: string, invocation: McpInvocationContext.McpInvocationScope) {
+  const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+  const bindingOption = yield* directory
+    .getBinding(invocation.threadId)
+    .pipe(
+      Effect.mapError(() =>
+        failTaskTool(operation, "Could not resolve the active calling provider session."),
+      ),
+    );
+  const binding = Option.getOrUndefined(bindingOption);
+  if (
+    binding?.status !== "running" ||
+    binding.providerInstanceId !== invocation.providerInstanceId ||
+    binding.runtimeMode === undefined
+  ) {
+    return yield* failTaskTool(
+      operation,
+      "The calling provider session no longer matches this MCP invocation.",
+    );
+  }
+  const activeTurn = yield* decodeActiveProviderTurnPayload(binding.runtimePayload).pipe(
+    Effect.mapError(() =>
+      failTaskTool(
+        operation,
+        "The active calling turn does not expose an exact provider configuration.",
+      ),
+    ),
+  );
+  if (activeTurn.modelSelection.instanceId !== binding.providerInstanceId) {
+    return yield* failTaskTool(
+      operation,
+      "The active calling turn model does not match its provider session.",
+    );
+  }
+  const registry = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
+  const instance = yield* registry.getInstance(binding.providerInstanceId);
+  if (instance === undefined || !instance.enabled || instance.driverKind !== binding.provider) {
+    return yield* failTaskTool(
+      operation,
+      `The inherited provider instance '${binding.providerInstanceId}' is unavailable.`,
+      "unavailable",
+    );
+  }
+  return {
+    modelSelection: activeTurn.modelSelection,
+    runtimeMode: binding.runtimeMode,
+    interactionMode: activeTurn.interactionMode,
+  };
+});
 
 const resolveSpawnBaseRef = Effect.fn("TaskCoordinationToolkit.resolveSpawnBaseRef")(function* (
   git: GitWorkflowService.GitWorkflowService["Service"],
@@ -166,7 +230,6 @@ const handlers = {
     const operation = "task.spawn_thread";
     const scope = yield* requireActiveTaskMutationScope(operation);
     const invocation = yield* McpInvocationContext.McpInvocationContext;
-    const caller = scope.caller;
     const spawningTurnId = scope.activeTurnId;
 
     const targetProjectId = projectId ?? scope.task.workspaceProjectId;
@@ -314,6 +377,16 @@ const handlers = {
           branch = worktree.worktree.refName;
         }
 
+        const refreshedScope = yield* restore(requireActiveTaskMutationScope(operation));
+        if (refreshedScope.activeTurnId !== spawningTurnId) {
+          return yield* failTaskTool(
+            operation,
+            "The calling provider turn changed before the task thread could be created.",
+          );
+        }
+        const callerConfiguration = yield* restore(
+          requireEffectiveCallerConfiguration(operation, invocation),
+        );
         const createCommand: Extract<OrchestrationCommand, { type: "thread.agent.create" }> = {
           type: "thread.agent.create",
           commandId: commandId("create"),
@@ -323,20 +396,13 @@ const handlers = {
           spawningThreadId: invocation.threadId,
           spawningTurnId,
           title: titleFromMessage(message),
-          modelSelection: caller.modelSelection,
-          runtimeMode: caller.runtimeMode,
-          interactionMode: caller.interactionMode,
+          modelSelection: callerConfiguration.modelSelection,
+          runtimeMode: callerConfiguration.runtimeMode,
+          interactionMode: callerConfiguration.interactionMode,
           branch,
           worktreePath: createdWorktree,
           createdAt,
         };
-        const refreshedScope = yield* restore(requireActiveTaskMutationScope(operation));
-        if (refreshedScope.activeTurnId !== spawningTurnId) {
-          return yield* failTaskTool(
-            operation,
-            "The calling provider turn changed before the task thread could be created.",
-          );
-        }
         // Dispatch and ownership registration are likewise one commit point.
         yield* engine.dispatch(createCommand);
         createdThread = true;

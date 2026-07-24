@@ -16,8 +16,9 @@ thread without forcing dirty checkout deletion.
 The child inherits the active caller's provider-bound model selection, runtime
 mode, and interaction mode exactly. A target project's default model selection
 is intentionally ignored, including when the inherited provider instance is
-unavailable: the existing provider/session error is surfaced instead of
-silently moving the child to a configured default.
+unavailable: spawn checks the live provider-instance registry and surfaces a
+typed unavailable error instead of silently moving the child to a configured
+default.
 
 Every operation rechecks the active task, caller lineage, target membership,
 and repository approval. Mutating operations additionally require the calling
@@ -64,6 +65,17 @@ after either operation succeeds but before the handler records responsibility
 for compensating it. Setup, turn startup, and projection refresh remain
 interruptible.
 
+Immediately before `thread.agent.create`, spawn resolves the caller's active
+provider runtime binding and inherits that turn's exact provider instance,
+model selection (including options), runtime mode, and interaction mode. It
+fences the binding against the MCP invocation, then synchronously confirms that
+the exact inherited instance is still enabled and registered under the same
+provider driver before creating the durable child. If that preflight fails
+after repository worktree creation, ordinary spawn compensation removes the
+worktree and no child command is dispatched. Provider turn dispatch persists
+interaction mode alongside the existing active model-selection payload so the
+runtime binding remains the single effective-session source for this handoff.
+
 Failure and interruption compensation runs uninterruptibly and preserves the
 original failure or interruption. A created thread is deleted only after its
 created worktree has been confirmed removed; if worktree cleanup fails, the
@@ -83,7 +95,10 @@ The coordination toolkit tests cover:
 - schema rejection and typed `TaskToolError` responses, including capability
   denial on each handler;
 - active caller session and turn fencing, lineage changes during spawn, active
-  task checks, task membership, agent-only follow-up targets, and busy targets;
+  task checks, exact active-session configuration inheritance despite stale
+  thread defaults, registry-based inherited-instance availability with
+  worktree cleanup, task membership, agent-only follow-up targets, and busy
+  targets;
 - task-root and repository spawn behavior, approved project validation, stable
   local and paginated remote branch resolution, and unsafe base-ref rejection;
 - child-create and initial-turn failures, interruption after each external
