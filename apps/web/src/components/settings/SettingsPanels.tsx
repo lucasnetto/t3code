@@ -1,4 +1,4 @@
-import { ArchiveIcon, ArchiveX, LoaderIcon, PlusIcon, RefreshCwIcon } from "lucide-react";
+import { ArchiveIcon, LoaderIcon, PlusIcon, RefreshCwIcon } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
@@ -90,6 +90,8 @@ import { ProjectFavicon } from "../ProjectFavicon";
 import { buildArchivedThreadGroups } from "./archivedThreadGroups";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { isThemePreference, THEME_OPTIONS } from "../../lib/themePreferences";
+import { isAgentCreatedTaskThread } from "../../lib/threadUiPolicy";
+import { ArchivedThreadActionControl } from "./ArchivedThreadActionControl";
 
 const TIMESTAMP_FORMAT_LABELS = {
   locale: "System default",
@@ -1524,31 +1526,35 @@ export function ArchivedThreadsPanel() {
             {projectThreads.map((thread) => (
               <SettingsRow
                 key={thread.id}
-                onContextMenu={(event) => {
-                  event.preventDefault();
-                  void (async () => {
-                    const result = await settlePromise(() =>
-                      handleArchivedThreadContextMenu(
-                        scopeThreadRef(thread.environmentId, thread.id),
-                        {
-                          x: event.clientX,
-                          y: event.clientY,
-                        },
-                      ),
-                    );
-                    if (result._tag === "Failure") {
-                      const error = squashAtomCommandFailure(result);
-                      toastManager.add(
-                        stackedThreadToast({
-                          type: "error",
-                          title: "Archived thread action failed",
-                          description:
-                            error instanceof Error ? error.message : "An error occurred.",
-                        }),
-                      );
-                    }
-                  })();
-                }}
+                onContextMenu={
+                  isAgentCreatedTaskThread(thread)
+                    ? undefined
+                    : (event) => {
+                        event.preventDefault();
+                        void (async () => {
+                          const result = await settlePromise(() =>
+                            handleArchivedThreadContextMenu(
+                              scopeThreadRef(thread.environmentId, thread.id),
+                              {
+                                x: event.clientX,
+                                y: event.clientY,
+                              },
+                            ),
+                          );
+                          if (result._tag === "Failure") {
+                            const error = squashAtomCommandFailure(result);
+                            toastManager.add(
+                              stackedThreadToast({
+                                type: "error",
+                                title: "Archived thread action failed",
+                                description:
+                                  error instanceof Error ? error.message : "An error occurred.",
+                              }),
+                            );
+                          }
+                        })();
+                      }
+                }
                 title={thread.title}
                 description={
                   <>
@@ -1558,12 +1564,9 @@ export function ArchivedThreadsPanel() {
                   </>
                 }
                 control={
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-7 shrink-0 cursor-pointer gap-1.5 px-2.5"
-                    onClick={() => {
+                  <ArchivedThreadActionControl
+                    readOnly={isAgentCreatedTaskThread(thread)}
+                    onUnarchive={() => {
                       void (async () => {
                         const result = await unarchiveThread(
                           scopeThreadRef(thread.environmentId, thread.id),
@@ -1585,10 +1588,7 @@ export function ArchivedThreadsPanel() {
                         }
                       })();
                     }}
-                  >
-                    <ArchiveX className="size-3.5" />
-                    <span>Unarchive</span>
-                  </Button>
+                  />
                 }
               />
             ))}

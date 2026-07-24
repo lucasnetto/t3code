@@ -29,6 +29,7 @@ import {
   TaskId,
   ThreadId,
   TaskId,
+  TurnId,
   WS_METHODS,
   WsRpcGroup,
   EditorId,
@@ -7018,6 +7019,94 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.deepEqual(
         dispatchedCommands.map((command) => command.type),
         ["thread.archive", "thread.session.stop"],
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("allows trusted direct RPC mutations for agent-created task threads", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread-agent-trusted-client");
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatchedCommands.push(command);
+                return { sequence: dispatchedCommands.length };
+              }),
+            readEvents: () => Stream.empty,
+          },
+          projectionSnapshotQuery: {
+            getThreadShellById: () =>
+              Effect.succeed(
+                Option.some(
+                  makeDefaultOrchestrationThreadShell({
+                    id: threadId,
+                    taskContext: {
+                      taskId: TaskId.make("task-trusted-client"),
+                      createdBy: {
+                        kind: "agent",
+                        threadId: ThreadId.make("thread-parent"),
+                        turnId: TurnId.make("turn-parent"),
+                      },
+                    },
+                  }),
+                ),
+              ),
+          },
+        },
+      });
+
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const sendResult = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-agent-trusted-client-send"),
+            threadId,
+            message: {
+              messageId: MessageId.make("msg-agent-trusted-client-send"),
+              role: "user",
+              text: "human follow-up",
+              attachments: [],
+            },
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt,
+          }),
+        ),
+      );
+      assert.equal(sendResult.sequence, 1);
+
+      const metadataResult = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.meta.update",
+            commandId: CommandId.make("cmd-agent-trusted-client-meta"),
+            threadId,
+            title: "Manual operator title",
+          }),
+        ),
+      );
+      assert.equal(metadataResult.sequence, 2);
+
+      const interruptResult = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.turn.interrupt",
+            commandId: CommandId.make("cmd-agent-trusted-client-interrupt"),
+            threadId,
+            createdAt,
+          }),
+        ),
+      );
+      assert.equal(interruptResult.sequence, 3);
+      assert.deepEqual(
+        dispatchedCommands.map((command) => command.type),
+        ["thread.turn.start", "thread.meta.update", "thread.turn.interrupt"],
       );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );

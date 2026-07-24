@@ -74,7 +74,12 @@ export async function archiveSelectedThreadEntries<
 export function buildMultiSelectThreadContextMenuItems(input: {
   count: number;
   hasRunningThread: boolean;
+  hasReadOnlyThread?: boolean;
 }): readonly ContextMenuItem<"mark-unread" | "archive" | "delete">[] {
+  if (input.hasReadOnlyThread === true) {
+    return [{ id: "mark-unread", label: `Mark unread (${input.count})` }];
+  }
+
   return [
     { id: "mark-unread", label: `Mark unread (${input.count})` },
     {
@@ -83,6 +88,78 @@ export function buildMultiSelectThreadContextMenuItems(input: {
       disabled: input.hasRunningThread,
     },
     { id: "delete", label: `Delete (${input.count})`, destructive: true },
+  ];
+}
+
+export function buildThreadContextMenuItems(input: {
+  readOnly: boolean;
+}): readonly ContextMenuItem<
+  "rename" | "mark-unread" | "copy-path" | "copy-thread-id" | "delete"
+>[] {
+  return [
+    ...(!input.readOnly ? [{ id: "rename" as const, label: "Rename thread" }] : []),
+    { id: "mark-unread", label: "Mark unread" },
+    { id: "copy-path", label: "Copy Path" },
+    { id: "copy-thread-id", label: "Copy Thread ID" },
+    ...(!input.readOnly
+      ? [
+          {
+            id: "delete" as const,
+            label: "Delete",
+            destructive: true,
+            icon: "trash" as const,
+          },
+        ]
+      : []),
+  ];
+}
+
+export function buildSidebarV2MultiSelectThreadContextMenuItems(input: {
+  count: number;
+  hasReadOnlyThread: boolean;
+}): readonly ContextMenuItem<"settle" | "mark-unread" | "delete">[] {
+  return [
+    ...(!input.hasReadOnlyThread
+      ? [{ id: "settle" as const, label: `Settle (${input.count})` }]
+      : []),
+    { id: "mark-unread", label: `Mark unread (${input.count})` },
+    ...(!input.hasReadOnlyThread
+      ? [
+          {
+            id: "delete" as const,
+            label: `Delete (${input.count})`,
+            destructive: true,
+          },
+        ]
+      : []),
+  ];
+}
+
+export function buildSidebarV2ThreadContextMenuItems(input: {
+  readOnly: boolean;
+  supportsSettlement: boolean;
+  isSettled: boolean;
+}): readonly ContextMenuItem<"settle" | "unsettle" | "rename" | "mark-unread" | "delete">[] {
+  return [
+    ...(!input.readOnly && input.supportsSettlement
+      ? [
+          input.isSettled
+            ? { id: "unsettle" as const, label: "Un-settle thread" }
+            : { id: "settle" as const, label: "Settle thread" },
+        ]
+      : []),
+    ...(!input.readOnly ? [{ id: "rename" as const, label: "Rename thread" }] : []),
+    { id: "mark-unread", label: "Mark unread" },
+    ...(!input.readOnly
+      ? [
+          {
+            id: "delete" as const,
+            label: "Delete",
+            destructive: true,
+            icon: "trash" as const,
+          },
+        ]
+      : []),
   ];
 }
 

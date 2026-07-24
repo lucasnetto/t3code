@@ -10,6 +10,8 @@ import {
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import {
   CheckIcon,
+  BotIcon,
+  BriefcaseBusinessIcon,
   CircleCheckIcon,
   CircleDashedIcon,
   CloudIcon,
@@ -61,7 +63,7 @@ import { openCommandPalette } from "../commandPaletteBus";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useClientSettings } from "../hooks/useSettings";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
-import { useProjects, useThreadShells } from "../state/entities";
+import { useProjects, useTasks, useThreadShells } from "../state/entities";
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
 import { vcsEnvironment } from "../state/vcs";
 import { threadEnvironment } from "../state/threads";
@@ -72,6 +74,8 @@ import { formatRelativeTimeLabel } from "../timestampFormat";
 import type { SidebarThreadSummary } from "../types";
 import { cn } from "~/lib/utils";
 import {
+  buildSidebarV2MultiSelectThreadContextMenuItems,
+  buildSidebarV2ThreadContextMenuItems,
   firstValidTimestampMs,
   hasUnseenCompletion,
   isTrailingDoubleClick,
@@ -79,6 +83,7 @@ import {
   resolveSidebarV2Status,
   sortThreadsForSidebarV2,
 } from "./Sidebar.logic";
+import { isAgentCreatedTaskThread } from "../lib/threadUiPolicy";
 import { prStatusIndicator, resolveThreadPr } from "./ThreadStatusIndicators";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
@@ -129,6 +134,8 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   environmentLabel: string | null;
   projectCwd: string | null;
   projectTitle: string | null;
+  taskTitle: string | null;
+  agentParentTitle: string | null;
   providerEntryByInstanceId: ReadonlyMap<string, ProviderInstanceEntry>;
   onThreadClick: (event: ReactMouseEvent, threadRef: ScopedThreadRef) => void;
   onThreadActivate: (threadRef: ScopedThreadRef) => void;
@@ -165,6 +172,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
     [thread.environmentId, thread.id],
   );
   const threadKey = scopedThreadKey(threadRef);
+  const isReadOnly = isAgentCreatedTaskThread(thread);
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const isSelected = useThreadSelectionStore((state) => state.selectedThreadKeys.has(threadKey));
   const openPrLink = useOpenPrLink();
@@ -256,14 +264,21 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   );
   const handleDoubleClick = useCallback(
     (event: ReactMouseEvent) => {
-      if (isRenaming || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+      if (
+        isReadOnly ||
+        isRenaming ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey
+      ) {
         return;
       }
       if ((event.target as HTMLElement).closest("button, a, input")) return;
       event.preventDefault();
       onStartRename(threadRef, thread.title);
     },
-    [isRenaming, onStartRename, thread.title, threadRef],
+    [isReadOnly, isRenaming, onStartRename, thread.title, threadRef],
   );
   const renameCommittedRef = useRef(false);
   useEffect(() => {
@@ -321,47 +336,48 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
         : "hover:bg-accent/65",
   );
 
-  const title = isRenaming ? (
-    <input
-      autoFocus
-      value={renamingTitle}
-      aria-label="Thread title"
-      onChange={(event) => onRenameTitleChange(event.target.value)}
-      onFocus={(event) => event.currentTarget.select()}
-      onKeyDown={handleRenameKeyDown}
-      onBlur={handleRenameBlur}
-      onClick={(event) => event.stopPropagation()}
-      onDoubleClick={(event) => event.stopPropagation()}
-      className="min-w-0 flex-1 rounded-sm border border-border bg-background px-1 text-[13px] text-foreground outline-none focus:border-foreground"
-    />
-  ) : (
-    <span
-      className={cn(
-        "min-w-0 flex-1 text-[13px] leading-5",
-        variant === "card"
-          ? cn(
-              "line-clamp-2 break-words",
-              isUnread
-                ? "font-semibold text-foreground"
-                : status !== "ready"
-                  ? "font-semibold text-foreground/95"
-                  : shouldRecede
-                    ? "font-normal text-muted-foreground/75"
-                    : "font-medium text-foreground/90",
-            )
-          : cn(
-              "truncate transition-colors group-hover/v2-row:text-foreground",
-              props.isActive
-                ? "text-foreground"
-                : isUnread
-                  ? "font-medium text-muted-foreground"
-                  : "text-muted-foreground/60",
-            ),
-      )}
-    >
-      {thread.title}
-    </span>
-  );
+  const title =
+    isRenaming && !isReadOnly ? (
+      <input
+        autoFocus
+        value={renamingTitle}
+        aria-label="Thread title"
+        onChange={(event) => onRenameTitleChange(event.target.value)}
+        onFocus={(event) => event.currentTarget.select()}
+        onKeyDown={handleRenameKeyDown}
+        onBlur={handleRenameBlur}
+        onClick={(event) => event.stopPropagation()}
+        onDoubleClick={(event) => event.stopPropagation()}
+        className="min-w-0 flex-1 rounded-sm border border-border bg-background px-1 text-[13px] text-foreground outline-none focus:border-foreground"
+      />
+    ) : (
+      <span
+        className={cn(
+          "min-w-0 flex-1 text-[13px] leading-5",
+          variant === "card"
+            ? cn(
+                "line-clamp-2 break-words",
+                isUnread
+                  ? "font-semibold text-foreground"
+                  : status !== "ready"
+                    ? "font-semibold text-foreground/95"
+                    : shouldRecede
+                      ? "font-normal text-muted-foreground/75"
+                      : "font-medium text-foreground/90",
+              )
+            : cn(
+                "truncate transition-colors group-hover/v2-row:text-foreground",
+                props.isActive
+                  ? "text-foreground"
+                  : isUnread
+                    ? "font-medium text-muted-foreground"
+                    : "text-muted-foreground/60",
+              ),
+        )}
+      >
+        {thread.title}
+      </span>
+    );
 
   const prBadge =
     prStatus && pr ? (
@@ -386,7 +402,10 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
     return (
       <li
         data-thread-item
-        className="list-none [content-visibility:auto] [contain-intrinsic-size:auto_34px]"
+        className={cn(
+          "list-none [content-visibility:auto] [contain-intrinsic-size:auto_34px]",
+          props.agentParentTitle && "pl-3",
+        )}
       >
         <div
           role="button"
@@ -411,7 +430,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
               environmentId={thread.environmentId}
               cwd={props.projectCwd ?? ""}
               className="size-3.5"
-              fallbackIcon={MessageSquareIcon}
+              fallbackIcon={props.agentParentTitle ? BotIcon : MessageSquareIcon}
             />
           </span>
           {title}
@@ -428,7 +447,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                   )}
               </span>
             </span>
-            {!props.settlementSupported ? null : variantAction === "unsettle" ? (
+            {!props.settlementSupported || isReadOnly ? null : variantAction === "unsettle" ? (
               <button
                 type="button"
                 aria-label="Un-settle thread"
@@ -458,7 +477,10 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   return (
     <li
       data-thread-item
-      className="list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_96px]"
+      className={cn(
+        "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_96px]",
+        props.agentParentTitle && "pl-3",
+      )}
     >
       <div
         role="button"
@@ -488,8 +510,9 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
               environmentId={thread.environmentId}
               cwd={props.projectCwd ?? ""}
               className="size-3.5 shrink-0"
+              fallbackIcon={props.agentParentTitle ? BotIcon : BriefcaseBusinessIcon}
             />
-            {props.projectTitle ? (
+            {props.taskTitle || props.projectTitle ? (
               <span
                 className={cn(
                   "min-w-0 flex-1 truncate text-[13px] leading-5 text-muted-foreground/70",
@@ -500,7 +523,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                       : "font-medium",
                 )}
               >
-                {props.projectTitle}
+                {props.taskTitle ?? props.projectTitle}
               </span>
             ) : (
               <span className="flex-1" />
@@ -528,7 +551,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                   threadTimeLabel(thread)
                 )}
               </span>
-              {props.settlementSupported ? (
+              {props.settlementSupported && !isReadOnly ? (
                 <button
                   type="button"
                   aria-label="Settle thread"
@@ -543,6 +566,13 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
           </div>
           <div className="mt-1 flex min-w-0">{title}</div>
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground/65">
+            {props.agentParentTitle ? (
+              <span className="max-w-28 shrink-0 truncate">
+                Agent · from {props.agentParentTitle}
+              </span>
+            ) : props.taskTitle ? (
+              <span className="max-w-28 shrink-0 truncate">Task</span>
+            ) : null}
             {thread.branch ? (
               <span className="min-w-0 flex-1 overflow-hidden whitespace-nowrap font-mono [mask-image:linear-gradient(to_right,#000_0,#000_calc(100%-1rem),transparent_100%)] [-webkit-mask-image:linear-gradient(to_right,#000_0,#000_calc(100%-1rem),transparent_100%)]">
                 {thread.branch}
@@ -613,6 +643,7 @@ function latestTurnDiff(
 
 export default function SidebarV2() {
   const projects = useProjects();
+  const tasks = useTasks();
   const threads = useThreadShells();
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
@@ -677,6 +708,17 @@ export default function SidebarV2() {
     () =>
       new Map(projects.map((project) => [`${project.environmentId}:${project.id}`, project.title])),
     [projects],
+  );
+  const taskTitleByKey = useMemo(
+    () => new Map(tasks.map((task) => [`${task.environmentId}:${task.id}`, task.title] as const)),
+    [tasks],
+  );
+  const threadTitleByKey = useMemo(
+    () =>
+      new Map(
+        threads.map((thread) => [`${thread.environmentId}:${thread.id}`, thread.title] as const),
+      ),
+    [threads],
   );
 
   // now is quantized to the minute so effectiveSettled memoization doesn't
@@ -893,13 +935,19 @@ export default function SidebarV2() {
   const [renamingThreadKey, setRenamingThreadKey] = useState<string | null>(null);
   const [renamingTitle, setRenamingTitle] = useState("");
   const startThreadRename = useCallback((threadRef: ScopedThreadRef, title: string) => {
-    setRenamingThreadKey(scopedThreadKey(threadRef));
+    const threadKey = scopedThreadKey(threadRef);
+    if (isAgentCreatedTaskThread(threadByKeyRef.current.get(threadKey))) return;
+    setRenamingThreadKey(threadKey);
     setRenamingTitle(title);
   }, []);
   const cancelThreadRename = useCallback(() => setRenamingThreadKey(null), []);
   const commitThreadRename = useCallback(
     (threadRef: ScopedThreadRef, title: string, originalTitle: string) => {
       void (async () => {
+        if (isAgentCreatedTaskThread(threadByKeyRef.current.get(scopedThreadKey(threadRef)))) {
+          setRenamingThreadKey(null);
+          return;
+        }
         const trimmed = title.trim();
         setRenamingThreadKey(null);
         if (trimmed.length === 0) {
@@ -956,6 +1004,7 @@ export default function SidebarV2() {
     (threadRef: ScopedThreadRef, opts: { coSettlingKeys?: ReadonlySet<string> } = {}) => {
       void (async () => {
         const threadKey = scopedThreadKey(threadRef);
+        if (isAgentCreatedTaskThread(threadByKeyRef.current.get(threadKey))) return;
         if (settlingThreadKeysRef.current.has(threadKey)) return;
         settlingThreadKeysRef.current.add(threadKey);
         try {
@@ -1017,6 +1066,9 @@ export default function SidebarV2() {
   const attemptUnsettle = useCallback(
     (threadRef: ScopedThreadRef) => {
       void (async () => {
+        if (isAgentCreatedTaskThread(threadByKeyRef.current.get(scopedThreadKey(threadRef)))) {
+          return;
+        }
         const result = await unsettleThread(threadRef);
         if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
           const error = squashAtomCommandFailure(result);
@@ -1047,18 +1099,21 @@ export default function SidebarV2() {
       );
       if (threadKeys.length === 0) return;
       const count = threadKeys.length;
+      const hasReadOnlyThread = threadKeys.some((threadKey) =>
+        isAgentCreatedTaskThread(threadByKeyRef.current.get(threadKey)),
+      );
       const clicked = await settlePromise(() =>
         api.contextMenu.show(
-          [
-            { id: "settle", label: `Settle (${count})` },
-            { id: "mark-unread", label: `Mark unread (${count})` },
-            { id: "delete", label: `Delete (${count})`, destructive: true },
-          ],
+          buildSidebarV2MultiSelectThreadContextMenuItems({
+            count,
+            hasReadOnlyThread,
+          }),
           position,
         ),
       );
       if (clicked._tag === "Failure") return;
       if (clicked.value === "settle") {
+        if (hasReadOnlyThread) return;
         // Post-settle navigation must skip threads settling in this same
         // batch — they are all leaving the card block together. Rows that
         // are already explicitly settled are skipped: nothing to do on a
@@ -1081,6 +1136,7 @@ export default function SidebarV2() {
         return;
       }
       if (clicked.value !== "delete") return;
+      if (hasReadOnlyThread) return;
       if (confirmThreadDelete) {
         const confirmed = await settlePromise(() =>
           api.dialogs.confirm(
@@ -1151,38 +1207,36 @@ export default function SidebarV2() {
           serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSettlement ===
           true;
         const isSettled = settledThreadKeysRef.current.has(threadKey);
+        const isReadOnly = isAgentCreatedTaskThread(thread);
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
-            [
-              ...(supportsSettlement
-                ? [
-                    isSettled
-                      ? { id: "unsettle", label: "Un-settle thread" }
-                      : { id: "settle", label: "Settle thread" },
-                  ]
-                : []),
-              { id: "rename", label: "Rename thread" },
-              { id: "mark-unread", label: "Mark unread" },
-              { id: "delete", label: "Delete", destructive: true, icon: "trash" },
-            ],
+            buildSidebarV2ThreadContextMenuItems({
+              readOnly: isReadOnly,
+              supportsSettlement,
+              isSettled,
+            }),
             position,
           ),
         );
         if (clicked._tag === "Failure") return;
         switch (clicked.value) {
           case "settle":
+            if (isReadOnly) return;
             attemptSettle(threadRef);
             return;
           case "unsettle":
+            if (isReadOnly) return;
             attemptUnsettle(threadRef);
             return;
           case "rename":
+            if (isReadOnly) return;
             startThreadRename(threadRef, thread.title);
             return;
           case "mark-unread":
             markThreadUnread(threadKey, thread.latestTurn?.completedAt);
             return;
           case "delete": {
+            if (isReadOnly) return;
             if (confirmThreadDelete) {
               const confirmed = await settlePromise(() =>
                 api.dialogs.confirm(
@@ -1505,6 +1559,20 @@ export default function SidebarV2() {
                   }
                   projectTitle={
                     projectTitleByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null
+                  }
+                  taskTitle={
+                    thread.taskContext
+                      ? (taskTitleByKey.get(
+                          `${thread.environmentId}:${thread.taskContext.taskId}`,
+                        ) ?? null)
+                      : null
+                  }
+                  agentParentTitle={
+                    thread.taskContext?.createdBy.kind === "agent"
+                      ? (threadTitleByKey.get(
+                          `${thread.environmentId}:${thread.taskContext.createdBy.threadId}`,
+                        ) ?? thread.taskContext.createdBy.threadId)
+                      : null
                   }
                   providerEntryByInstanceId={providerEntryByInstanceId}
                   onThreadClick={handleThreadClick}

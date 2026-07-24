@@ -181,6 +181,7 @@ import { openCommandPalette } from "../commandPaletteBus";
 import {
   archiveSelectedThreadEntries,
   buildMultiSelectThreadContextMenuItems,
+  buildThreadContextMenuItems,
   getSidebarThreadIdsToPrewarm,
   resolveAdjacentThreadId,
   isContextMenuPointerDown,
@@ -196,6 +197,7 @@ import {
   useThreadJumpHintVisibility,
   ThreadStatusPill,
 } from "./Sidebar.logic";
+import { isAgentCreatedTaskThread } from "../lib/threadUiPolicy";
 import { sortThreads } from "../lib/threadSort";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
@@ -378,6 +380,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
   } = props;
   const threadRef = scopeThreadRef(thread.environmentId, thread.id);
   const threadKey = scopedThreadKey(threadRef);
+  const isReadOnly = isAgentCreatedTaskThread(thread);
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const isSelected = useThreadSelectionStore((state) => state.selectedThreadKeys.has(threadKey));
   const runningTerminalIds = useThreadRunningTerminalIds({
@@ -490,6 +493,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
   );
   const handleRowDoubleClick = useCallback(
     (event: React.MouseEvent) => {
+      if (isReadOnly) return;
       // Already renaming this row: a double-click on the row chrome (outside the
       // input) must not restart and discard the in-progress edit.
       if (renamingThreadKey === threadKey) return;
@@ -504,7 +508,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
       event.preventDefault();
       startThreadRename(threadKey, thread.title);
     },
-    [isMobile, renamingThreadKey, startThreadRename, threadKey, thread.title],
+    [isMobile, isReadOnly, renamingThreadKey, startThreadRename, threadKey, thread.title],
   );
   const handleRowKeyDown = useCallback(
     (event: React.KeyboardEvent) => {
@@ -699,7 +703,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
             </Tooltip>
           )}
           {threadStatus && <ThreadStatusLabel status={threadStatus} />}
-          {renamingThreadKey === threadKey ? (
+          {renamingThreadKey === threadKey && !isReadOnly ? (
             <input
               ref={handleRenameInputRef}
               className="min-w-0 flex-1 truncate text-base sm:text-xs bg-transparent outline-none border border-ring rounded px-0.5"
@@ -773,7 +777,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               isRemoteThread ? "max-sm:min-w-24" : "max-sm:min-w-20"
             }`}
           >
-            {isConfirmingArchive ? (
+            {isReadOnly ? null : isConfirmingArchive ? (
               <button
                 ref={handleConfirmArchiveRef}
                 type="button"
@@ -1772,9 +1776,16 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       const hasRunningThread = selectedThreadEntries.some(
         ({ thread }) => thread.session?.status === "running" && thread.session.activeTurnId != null,
       );
+      const hasReadOnlyThread = selectedThreadEntries.some(({ thread }) =>
+        isAgentCreatedTaskThread(thread),
+      );
 
       const clicked = await api.contextMenu.show(
-        buildMultiSelectThreadContextMenuItems({ count, hasRunningThread }),
+        buildMultiSelectThreadContextMenuItems({
+          count,
+          hasRunningThread,
+          hasReadOnlyThread,
+        }),
         position,
       );
 
@@ -1787,6 +1798,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       }
 
       if (clicked === "archive") {
+        if (hasReadOnlyThread) return;
         if (appSettingsConfirmThreadArchive) {
           const confirmed = await api.dialogs.confirm(
             `Archive ${count} thread${count === 1 ? "" : "s"}?`,
@@ -1828,6 +1840,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       }
 
       if (clicked !== "delete") return;
+      if (hasReadOnlyThread) return;
 
       if (appSettingsConfirmThreadDelete) {
         const confirmed = await api.dialogs.confirm(
@@ -2000,6 +2013,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
   const attemptArchiveThread = useCallback(
     async (threadRef: ScopedThreadRef) => {
+      const thread = sidebarThreadByKeyRef.current.get(scopedThreadKey(threadRef));
+      if (isAgentCreatedTaskThread(thread)) return;
       const result = await archiveThread(threadRef);
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
         const error = squashAtomCommandFailure(result);
@@ -2021,6 +2036,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   }, []);
 
   const startThreadRename = useCallback((threadKey: string, title: string) => {
+    if (isAgentCreatedTaskThread(sidebarThreadByKeyRef.current.get(threadKey))) return;
     setRenamingThreadKey(threadKey);
     setRenamingTitle(title);
     renamingCommittedRef.current = false;
@@ -2029,6 +2045,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const commitRename = useCallback(
     async (threadRef: ScopedThreadRef, newTitle: string, originalTitle: string) => {
       const threadKey = scopedThreadKey(threadRef);
+      if (isAgentCreatedTaskThread(sidebarThreadByKeyRef.current.get(threadKey))) {
+        setRenamingThreadKey(null);
+        renamingInputRef.current = null;
+        return;
+      }
       const finishRename = () => {
         setRenamingThreadKey((current) => {
           if (current !== threadKey) return current;
@@ -2160,18 +2181,14 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       );
       const threadWorkspacePath =
         thread.worktreePath ?? threadProject?.workspaceRoot ?? project.workspaceRoot ?? null;
+      const isReadOnly = isAgentCreatedTaskThread(thread);
       const clicked = await api.contextMenu.show(
-        [
-          { id: "rename", label: "Rename thread" },
-          { id: "mark-unread", label: "Mark unread" },
-          { id: "copy-path", label: "Copy Path" },
-          { id: "copy-thread-id", label: "Copy Thread ID" },
-          { id: "delete", label: "Delete", destructive: true, icon: "trash" },
-        ],
+        buildThreadContextMenuItems({ readOnly: isReadOnly }),
         position,
       );
 
       if (clicked === "rename") {
+        if (isReadOnly) return;
         startThreadRename(threadKey, thread.title);
         return;
       }
@@ -2199,6 +2216,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         return;
       }
       if (clicked !== "delete") return;
+      if (isReadOnly) return;
       if (appSettingsConfirmThreadDelete) {
         const confirmed = await api.dialogs.confirm(
           [
