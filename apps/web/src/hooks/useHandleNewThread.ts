@@ -3,6 +3,7 @@ import {
   scopeProjectRef,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
+import type { EnvironmentTask } from "@t3tools/client-runtime/state/models";
 import {
   DEFAULT_RUNTIME_MODE,
   DEFAULT_SERVER_SETTINGS,
@@ -222,8 +223,52 @@ export function useNewTaskHandler() {
           title: input.title,
           workspaceProjectId,
           approvedProjectIds: input.approvedProjects.map((project) => project.projectId),
+          createTask: true,
         },
       });
+      applyStickyState(draftId);
+
+      await router.navigate({
+        to: "/draft/$draftId",
+        params: { draftId },
+      });
+    },
+    [router],
+  );
+}
+
+export function useNewTaskThreadHandler() {
+  const router = useRouter();
+
+  return useCallback(
+    async (task: EnvironmentTask): Promise<void> => {
+      const draftId = newDraftId();
+      const threadId = newThreadId();
+      const createdAt = new Date().toISOString();
+      const taskWorkspaceRef = scopeProjectRef(task.environmentId, task.workspaceProjectId);
+      const { applyStickyState, setLogicalProjectDraftThreadId } = useComposerDraftStore.getState();
+
+      setLogicalProjectDraftThreadId(
+        `task-thread-draft:${task.id}:${draftId}`,
+        taskWorkspaceRef,
+        draftId,
+        {
+          threadId,
+          createdAt,
+          branch: null,
+          worktreePath: null,
+          envMode: "local",
+          startFromOrigin: false,
+          runtimeMode: DEFAULT_RUNTIME_MODE,
+          taskDraft: {
+            taskId: task.id,
+            title: task.title,
+            workspaceProjectId: task.workspaceProjectId,
+            approvedProjectIds: task.approvedProjectIds,
+            createTask: false,
+          },
+        },
+      );
       applyStickyState(draftId);
 
       await router.navigate({

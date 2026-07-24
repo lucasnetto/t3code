@@ -58,7 +58,7 @@ const isProviderDriverKind = Schema.is(ProviderDriverKind);
 const isReviewCommentContext = Schema.is(ReviewCommentContextSchema);
 
 export const COMPOSER_DRAFT_STORAGE_KEY = "t3code:composer-drafts:v1";
-const COMPOSER_DRAFT_STORAGE_VERSION = 8;
+const COMPOSER_DRAFT_STORAGE_VERSION = 9;
 const DraftThreadEnvModeSchema = Schema.Literals(["local", "worktree"]);
 export type DraftThreadEnvMode = typeof DraftThreadEnvModeSchema.Type;
 
@@ -67,6 +67,7 @@ export const TaskDraftContext = Schema.Struct({
   title: Schema.String,
   workspaceProjectId: ProjectId,
   approvedProjectIds: Schema.Array(ProjectId),
+  createTask: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 });
 export type TaskDraftContext = typeof TaskDraftContext.Type;
 const isTaskDraftContext = Schema.is(TaskDraftContext);

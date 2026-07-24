@@ -515,7 +515,10 @@ const makeWsRpcLayer = (
         isOrchestrationDispatchCommandError(cause)
           ? cause
           : new OrchestrationDispatchCommandError({
-              message: cause instanceof Error ? cause.message : fallbackMessage,
+              message:
+                cause instanceof Error && cause.message.trim().length > 0
+                  ? cause.message
+                  : fallbackMessage,
               cause,
             });
       const randomUUID = crypto.randomUUIDv4.pipe(
@@ -879,6 +882,112 @@ const makeWsRpcLayer = (
           Stream.flatMap((items) => Stream.fromIterable(items)),
         );
 
+      const loadTaskWorkspaceContext = (taskId: TaskId) =>
+        projectionSnapshotQuery.getShellSnapshot().pipe(
+          Effect.mapError((cause) =>
+            toDispatchCommandError(cause, "Failed to load task workspace context."),
+          ),
+          Effect.flatMap((snapshot) => {
+            const task = snapshot.tasks?.find((candidate) => candidate.id === taskId);
+            if (!task) {
+              return Effect.fail(
+                new OrchestrationDispatchCommandError({
+                  message: `Task ${taskId} was not found while preparing its workspace.`,
+                  cause: { taskId },
+                }),
+              );
+            }
+            return Effect.succeed({
+              task,
+              projects: snapshot.projects,
+              threads: snapshot.threads,
+            });
+          }),
+        );
+
+      const refreshTaskWorkspace = (taskId: TaskId) =>
+        loadTaskWorkspaceContext(taskId).pipe(
+          Effect.flatMap(taskWorkspace.prepare),
+          Effect.mapError((cause) =>
+            toDispatchCommandError(cause, "Failed to prepare task workspace."),
+          ),
+        );
+
+      const refreshTaskWorkspaceAfterRepositoryApproval = (
+        command: Extract<OrchestrationCommand, { type: "task.repository.approve" }>,
+      ) =>
+        refreshTaskWorkspace(command.taskId).pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning(
+              "Repository approval committed, but generated task context refresh failed",
+              {
+                taskId: command.taskId,
+                projectId: command.projectId,
+                commandId: command.commandId,
+                detail: cause.message,
+                retry:
+                  "Retry the same task.repository.approve command to rematerialize TASK.md; the durable command is receipt-deduplicated.",
+              },
+            ),
+          ),
+        );
+
+      const validateTaskRepositoryApproval = Effect.fn("WsRpc.validateTaskRepositoryApproval")(
+        function* (command: Extract<OrchestrationCommand, { type: "task.repository.approve" }>) {
+          const context = yield* loadTaskWorkspaceContext(command.taskId);
+
+          // Preserve receipt-deduplicated retries and existing historical approvals. Eligibility is
+          // authoritative when adding a repository, not a retroactive read constraint.
+          if (context.task.approvedProjectIds.includes(command.projectId)) {
+            return;
+          }
+
+          const project = context.projects.find((candidate) => candidate.id === command.projectId);
+          if (!project) {
+            return yield* new OrchestrationDispatchCommandError({
+              message: `Project '${command.projectId}' is unavailable or deleted. Choose an active Git repository.`,
+              cause: {
+                taskId: command.taskId,
+                projectId: command.projectId,
+              },
+            });
+          }
+
+          if (
+            project.id === context.task.workspaceProjectId ||
+            project.visibility === "internal-task"
+          ) {
+            return yield* new OrchestrationDispatchCommandError({
+              message: `Project '${project.title}' is an internal task workspace and cannot be approved as a repository.`,
+              cause: {
+                taskId: command.taskId,
+                projectId: command.projectId,
+              },
+            });
+          }
+
+          const status = yield* gitWorkflow.localStatus({ cwd: project.workspaceRoot }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationDispatchCommandError({
+                  message: `Could not verify Git repository '${project.title}' at '${project.workspaceRoot}'. Check that the path is available and try again.`,
+                  cause,
+                }),
+            ),
+          );
+          if (!status.isRepo) {
+            return yield* new OrchestrationDispatchCommandError({
+              message: `Project '${project.title}' at '${project.workspaceRoot}' is not a Git repository. Initialize Git or choose another project.`,
+              cause: {
+                taskId: command.taskId,
+                projectId: command.projectId,
+                workspaceRoot: project.workspaceRoot,
+              },
+            });
+          }
+        },
+      );
+
       const dispatchBootstrapTurnStart = (
         command: Extract<OrchestrationCommand, { type: "thread.turn.start" }>,
       ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> =>
@@ -956,37 +1065,6 @@ const makeWsRpcLayer = (
               }
             },
           );
-
-          const loadTaskWorkspaceContext = (taskId: TaskId) =>
-            projectionSnapshotQuery.getShellSnapshot().pipe(
-              Effect.mapError((cause) =>
-                toDispatchCommandError(cause, "Failed to load task workspace context."),
-              ),
-              Effect.flatMap((snapshot) => {
-                const task = snapshot.tasks?.find((candidate) => candidate.id === taskId);
-                if (!task) {
-                  return Effect.fail(
-                    new OrchestrationDispatchCommandError({
-                      message: `Task ${taskId} was not found while preparing its workspace.`,
-                      cause: { taskId },
-                    }),
-                  );
-                }
-                return Effect.succeed({
-                  task,
-                  projects: snapshot.projects,
-                  threads: snapshot.threads,
-                });
-              }),
-            );
-
-          const refreshTaskWorkspace = (taskId: TaskId) =>
-            loadTaskWorkspaceContext(taskId).pipe(
-              Effect.flatMap(taskWorkspace.prepare),
-              Effect.mapError((cause) =>
-                toDispatchCommandError(cause, "Failed to prepare task workspace."),
-              ),
-            );
 
           const cleanupCreatedThread = () =>
             createdThread && !createdTask
@@ -1514,16 +1592,28 @@ const makeWsRpcLayer = (
       const dispatchNormalizedCommand = (
         normalizedCommand: OrchestrationCommand,
       ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> => {
-        const dispatchEffect =
-          normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap
-            ? dispatchBootstrapTurnStart(normalizedCommand)
-            : orchestrationEngine
-                .dispatch(normalizedCommand)
-                .pipe(
-                  Effect.mapError((cause) =>
-                    toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+        const dispatchEffect = (
+          normalizedCommand.type === "task.repository.approve"
+            ? validateTaskRepositoryApproval(normalizedCommand)
+            : Effect.void
+        ).pipe(
+          Effect.andThen(
+            normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap
+              ? dispatchBootstrapTurnStart(normalizedCommand)
+              : orchestrationEngine
+                  .dispatch(normalizedCommand)
+                  .pipe(
+                    Effect.mapError((cause) =>
+                      toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+                    ),
                   ),
-                );
+          ),
+          Effect.tap(() =>
+            normalizedCommand.type === "task.repository.approve"
+              ? refreshTaskWorkspaceAfterRepositoryApproval(normalizedCommand)
+              : Effect.void,
+          ),
+        );
 
         return startup
           .enqueueCommand(dispatchEffect)

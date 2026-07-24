@@ -423,6 +423,7 @@ const buildAppUnderTest = (options?: {
     vcsDriverRegistry?: Partial<VcsDriverRegistry.VcsDriverRegistry["Service"]>;
     gitVcsDriver?: Partial<GitVcsDriver.GitVcsDriver["Service"]>;
     gitManager?: Partial<GitManager.GitManager["Service"]>;
+    gitWorkflow?: Partial<GitWorkflowService.GitWorkflowService["Service"]>;
     sourceControlRepositoryService?: Partial<
       SourceControlRepositoryService.SourceControlRepositoryService["Service"]
     >;
@@ -598,11 +599,15 @@ const buildAppUnderTest = (options?: {
       ),
       ProjectFaviconResolver.layer.pipe(Layer.provide(WorkspacePaths.layer)),
     );
-    const gitWorkflowLayer = GitWorkflowService.layer.pipe(
-      Layer.provideMerge(vcsDriverRegistryLayer),
-      Layer.provideMerge(gitVcsDriverLayer),
-      Layer.provideMerge(gitManagerLayer),
-    );
+    const gitWorkflowLayer = options?.layers?.gitWorkflow
+      ? Layer.mock(GitWorkflowService.GitWorkflowService)({
+          ...options.layers.gitWorkflow,
+        })
+      : GitWorkflowService.layer.pipe(
+          Layer.provideMerge(vcsDriverRegistryLayer),
+          Layer.provideMerge(gitVcsDriverLayer),
+          Layer.provideMerge(gitManagerLayer),
+        );
     const vcsProvisioningLayer = VcsProvisioningService.layer.pipe(
       Layer.provide(vcsDriverRegistryLayer),
     );
@@ -8022,6 +8027,322 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.include(result.failure.message, "does not match the approved project projection");
       assert.equal(createWorktree.mock.calls.length, 0);
       assert.deepEqual(dispatchedCommands, []);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("refreshes generated task context after approving a repository", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const taskRoot = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-task-approval-",
+      });
+      const taskId = TaskId.make("task-approval");
+      const approvedProjectId = ProjectId.make("project-approved");
+      const addedProjectId = ProjectId.make("project-added");
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+      const localStatus = vi.fn((_input: { readonly cwd: string }) =>
+        Effect.succeed({
+          isRepo: true,
+          hasPrimaryRemote: true,
+          isDefaultRef: true,
+          refName: "main",
+          hasWorkingTreeChanges: false,
+          workingTree: {
+            files: [],
+            insertions: 0,
+            deletions: 0,
+          },
+        }),
+      );
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatchedCommands.push(command);
+                return { sequence: dispatchedCommands.length };
+              }),
+            readEvents: () => Stream.empty,
+          },
+          projectionSnapshotQuery: {
+            getShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: dispatchedCommands.length,
+                tasks: [
+                  {
+                    id: taskId,
+                    title: "Coordinate repositories",
+                    status: "active",
+                    rootPath: taskRoot,
+                    workspaceProjectId: ProjectId.make("project-task-approval"),
+                    approvedProjectIds: dispatchedCommands.some(
+                      (command) => command.type === "task.repository.approve",
+                    )
+                      ? [approvedProjectId, addedProjectId]
+                      : [approvedProjectId],
+                    createdAt,
+                    updatedAt: createdAt,
+                    completedAt: null,
+                  },
+                ],
+                projects: [
+                  {
+                    id: approvedProjectId,
+                    title: "API",
+                    workspaceRoot: "/tmp/api",
+                    defaultModelSelection: null,
+                    scripts: [],
+                    createdAt,
+                    updatedAt: createdAt,
+                  },
+                  {
+                    id: addedProjectId,
+                    title: "Web",
+                    workspaceRoot: "/tmp/web",
+                    defaultModelSelection: null,
+                    scripts: [],
+                    createdAt,
+                    updatedAt: createdAt,
+                  },
+                ],
+                threads: [],
+                updatedAt: createdAt,
+              }),
+          },
+          gitWorkflow: {
+            localStatus,
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const response = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "task.repository.approve",
+            commandId: CommandId.make("cmd-task-approval"),
+            taskId,
+            projectId: addedProjectId,
+            approvedAt: createdAt,
+          }),
+        ),
+      );
+
+      assert.equal(response.sequence, 1);
+      assert.deepEqual(localStatus.mock.calls[0]?.[0], { cwd: "/tmp/web" });
+      const context = yield* fileSystem.readFileString(path.join(taskRoot, "TASK.md"));
+      assert.match(context, /API \(`project-approved`\)/);
+      assert.match(context, /Web \(`project-added`\)/);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects non-Git, deleted, and task-internal repository approvals", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const taskRoot = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-task-approval-eligibility-",
+      });
+      const taskId = TaskId.make("task-approval-eligibility");
+      const nonGitProjectId = ProjectId.make("project-non-git");
+      const deletedProjectId = ProjectId.make("project-deleted");
+      const internalProjectId = ProjectId.make("project-task-internal");
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+      const dispatch = vi.fn((command: OrchestrationCommand) =>
+        Effect.sync(() => {
+          dispatchedCommands.push(command);
+          return { sequence: 1 };
+        }),
+      );
+      const localStatus = vi.fn((_input: { readonly cwd: string }) =>
+        Effect.succeed({
+          isRepo: false,
+          hasPrimaryRemote: false,
+          isDefaultRef: false,
+          refName: null,
+          hasWorkingTreeChanges: false,
+          workingTree: {
+            files: [],
+            insertions: 0,
+            deletions: 0,
+          },
+        }),
+      );
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            dispatch,
+            readEvents: () => Stream.empty,
+          },
+          projectionSnapshotQuery: {
+            getShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: 1,
+                tasks: [
+                  {
+                    id: taskId,
+                    title: "Coordinate repositories",
+                    status: "active",
+                    rootPath: taskRoot,
+                    workspaceProjectId: internalProjectId,
+                    approvedProjectIds: [],
+                    createdAt,
+                    updatedAt: createdAt,
+                    completedAt: null,
+                  },
+                ],
+                projects: [
+                  {
+                    id: nonGitProjectId,
+                    title: "Documents",
+                    workspaceRoot: "/tmp/documents",
+                    repositoryIdentity: null,
+                    defaultModelSelection: null,
+                    scripts: [],
+                    createdAt,
+                    updatedAt: createdAt,
+                  },
+                  {
+                    id: internalProjectId,
+                    title: "Task workspace",
+                    workspaceRoot: taskRoot,
+                    repositoryIdentity: null,
+                    defaultModelSelection: null,
+                    scripts: [],
+                    createdAt,
+                    updatedAt: createdAt,
+                    visibility: "internal-task",
+                  },
+                ],
+                threads: [],
+                updatedAt: createdAt,
+              }),
+          },
+          gitWorkflow: {
+            localStatus,
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const approve = (projectId: ProjectId, commandId: string) =>
+        Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+              type: "task.repository.approve",
+              commandId: CommandId.make(commandId),
+              taskId,
+              projectId,
+              approvedAt: createdAt,
+            }),
+          ),
+        ).pipe(Effect.result);
+
+      const nonGitResult = yield* approve(nonGitProjectId, "cmd-approve-non-git");
+      assertTrue(nonGitResult._tag === "Failure");
+      assertTrue(nonGitResult.failure._tag === "OrchestrationDispatchCommandError");
+      assert.include(nonGitResult.failure.message, "is not a Git repository");
+      assert.include(nonGitResult.failure.message, "Initialize Git or choose another project");
+
+      const deletedResult = yield* approve(deletedProjectId, "cmd-approve-deleted");
+      assertTrue(deletedResult._tag === "Failure");
+      assertTrue(deletedResult.failure._tag === "OrchestrationDispatchCommandError");
+      assert.include(deletedResult.failure.message, "is unavailable or deleted");
+      assert.include(deletedResult.failure.message, "Choose an active Git repository");
+
+      const internalResult = yield* approve(internalProjectId, "cmd-approve-internal");
+      assertTrue(internalResult._tag === "Failure");
+      assertTrue(internalResult.failure._tag === "OrchestrationDispatchCommandError");
+      assert.include(internalResult.failure.message, "is an internal task workspace");
+
+      assert.equal(localStatus.mock.calls.length, 1);
+      assert.deepEqual(localStatus.mock.calls[0]?.[0], { cwd: "/tmp/documents" });
+      assert.equal(dispatchedCommands.length, 0);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("acknowledges repository approval when task context refresh fails", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const blockedTaskRoot = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-task-approval-refresh-failure-",
+      });
+      yield* fileSystem.writeFileString(
+        path.join(blockedTaskRoot, "worktrees"),
+        "blocks worktree directory creation",
+      );
+      const taskId = TaskId.make("task-approval-refresh-failure");
+      const projectId = ProjectId.make("project-added");
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatchedCommands.push(command);
+                return { sequence: 41 };
+              }),
+            readEvents: () => Stream.empty,
+          },
+          projectionSnapshotQuery: {
+            getShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: 41,
+                tasks: [
+                  {
+                    id: taskId,
+                    title: "Coordinate repositories",
+                    status: "active",
+                    rootPath: blockedTaskRoot,
+                    workspaceProjectId: ProjectId.make("project-task-approval-refresh-failure"),
+                    approvedProjectIds: [projectId],
+                    createdAt,
+                    updatedAt: createdAt,
+                    completedAt: null,
+                  },
+                ],
+                projects: [
+                  {
+                    id: projectId,
+                    title: "Web",
+                    workspaceRoot: "/tmp/web",
+                    defaultModelSelection: null,
+                    scripts: [],
+                    createdAt,
+                    updatedAt: createdAt,
+                  },
+                ],
+                threads: [],
+                updatedAt: createdAt,
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const response = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "task.repository.approve",
+            commandId: CommandId.make("cmd-task-approval-refresh-failure"),
+            taskId,
+            projectId,
+            approvedAt: createdAt,
+          }),
+        ),
+      );
+
+      assert.deepEqual(response, { sequence: 41 });
+      assert.equal(dispatchedCommands.length, 1);
+      assert.equal(dispatchedCommands[0]?.type, "task.repository.approve");
+      assert.equal(yield* fileSystem.exists(path.join(blockedTaskRoot, "TASK.md")), false);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
