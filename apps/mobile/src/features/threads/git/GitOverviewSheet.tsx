@@ -31,6 +31,7 @@ import { useSelectedThreadWorktree } from "../../../state/use-selected-thread-wo
 import { vcsEnvironment } from "../../../state/vcs";
 import { resolveGitOverviewReviewNavigationAction } from "./git-overview-navigation";
 import { MetaCard, SheetListRow, menuItemIconName, statusSummary } from "./gitSheetComponents";
+import { resolveMobileThreadUiPolicy } from "../threadUiPolicy";
 
 const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
 
@@ -50,6 +51,7 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
   const environmentId = EnvironmentId.make(props.route.params.environmentId);
   const threadId = ThreadId.make(props.route.params.threadId);
   const { selectedThread } = useThreadSelection();
+  const readOnly = resolveMobileThreadUiPolicy(selectedThread).readOnly;
   const { selectedThreadCwd, selectedThreadWorktreePath } = useSelectedThreadWorktree();
   const gitState = useSelectedThreadGitState();
   const gitActions = useSelectedThreadGitActions();
@@ -83,16 +85,18 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
 
   const sheetMenuItems = useMemo(
     () =>
-      menuItems.map((item) => ({
-        item,
-        disabledReason: getGitActionDisabledReason({
+      menuItems
+        .filter((item) => !readOnly || item.kind === "open_pr")
+        .map((item) => ({
           item,
-          gitStatus: gitStatus.data,
-          isBusy: busy,
-          hasOriginRemote: hasPrimaryRemote,
-        }),
-      })),
-    [busy, gitStatus.data, hasPrimaryRemote, menuItems],
+          disabledReason: getGitActionDisabledReason({
+            item,
+            gitStatus: gitStatus.data,
+            isBusy: busy,
+            hasOriginRemote: hasPrimaryRemote,
+          }),
+        })),
+    [busy, gitStatus.data, hasPrimaryRemote, menuItems, readOnly],
   );
 
   useEffect(() => {
@@ -244,7 +248,7 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
             />
           </View>
         ))}
-        {behindCount > 0 ? (
+        {!readOnly && behindCount > 0 ? (
           <>
             <View className="ml-12 h-px bg-border" />
             <SheetListRow
@@ -271,19 +275,23 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
             );
           }}
         />
-        <View className="ml-12 h-px bg-border" />
-        <SheetListRow
-          icon="point.topleft.down.curvedto.point.bottomright.up"
-          title="Branches & worktrees"
-          subtitle="Switch branch, create branch, or move to a worktree"
-          disabled={busy || !isRepo}
-          onPress={() =>
-            navigation.navigate("GitBranches", {
-              environmentId: String(environmentId),
-              threadId: String(threadId),
-            })
-          }
-        />
+        {!readOnly ? (
+          <>
+            <View className="ml-12 h-px bg-border" />
+            <SheetListRow
+              icon="point.topleft.down.curvedto.point.bottomright.up"
+              title="Branches & worktrees"
+              subtitle="Switch branch, create branch, or move to a worktree"
+              disabled={busy || !isRepo}
+              onPress={() =>
+                navigation.navigate("GitBranches", {
+                  environmentId: String(environmentId),
+                  threadId: String(threadId),
+                })
+              }
+            />
+          </>
+        ) : null}
       </View>
 
       {currentWorktreePath ? <MetaCard label="Worktree" value={currentWorktreePath} /> : null}

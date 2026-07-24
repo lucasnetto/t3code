@@ -3,6 +3,8 @@ import { TaskId, ThreadId, TurnId } from "@t3tools/contracts";
 
 import {
   isMobileThreadUiActionAllowed,
+  isMobileThreadGitMutationAllowed,
+  isMobileThreadListMutationAllowed,
   resolveMobileThreadUiPolicy,
   type MobileThreadUiAction,
 } from "./threadUiPolicy";
@@ -12,6 +14,7 @@ const MUTATION_ACTIONS: ReadonlyArray<MobileThreadUiAction> = [
   "change-model",
   "change-runtime",
   "mutate-git",
+  "mutate-lifecycle",
   "open-terminal",
   "respond-to-request",
   "run-project-script",
@@ -36,8 +39,33 @@ describe("mobile thread UI policy", () => {
       expect(isMobileThreadUiActionAllowed(policy, action), action).toBe(false);
     }
     expect(isMobileThreadUiActionAllowed(policy, "inspect-files")).toBe(true);
+    expect(isMobileThreadUiActionAllowed(policy, "inspect-git")).toBe(true);
     expect(isMobileThreadUiActionAllowed(policy, "inspect-history")).toBe(true);
     expect(isMobileThreadUiActionAllowed(policy, "stop")).toBe(true);
+    expect(
+      isMobileThreadGitMutationAllowed({
+        taskContext: {
+          taskId: TaskId.make("task-1"),
+          createdBy: {
+            kind: "agent",
+            threadId: ThreadId.make("thread-coordinator"),
+            turnId: TurnId.make("turn-1"),
+          },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isMobileThreadListMutationAllowed({
+        taskContext: {
+          taskId: TaskId.make("task-1"),
+          createdBy: {
+            kind: "agent",
+            threadId: ThreadId.make("thread-coordinator"),
+            turnId: TurnId.make("turn-1"),
+          },
+        },
+      }),
+    ).toBe(false);
   });
 
   it("keeps user-created task threads mutable", () => {
@@ -52,6 +80,22 @@ describe("mobile thread UI policy", () => {
     for (const action of MUTATION_ACTIONS) {
       expect(isMobileThreadUiActionAllowed(policy, action), action).toBe(true);
     }
+    expect(
+      isMobileThreadListMutationAllowed({
+        taskContext: {
+          taskId: TaskId.make("task-1"),
+          createdBy: { kind: "user" },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      isMobileThreadGitMutationAllowed({
+        taskContext: {
+          taskId: TaskId.make("task-1"),
+          createdBy: { kind: "user" },
+        },
+      }),
+    ).toBe(true);
   });
 
   it("keeps standalone threads mutable", () => {
@@ -60,5 +104,6 @@ describe("mobile thread UI policy", () => {
     expect(policy).toEqual({ readOnly: false, reason: null });
     expect(isMobileThreadUiActionAllowed(policy, "send-message")).toBe(true);
     expect(isMobileThreadUiActionAllowed(policy, "mutate-git")).toBe(true);
+    expect(isMobileThreadListMutationAllowed({})).toBe(true);
   });
 });

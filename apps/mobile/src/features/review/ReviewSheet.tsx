@@ -54,6 +54,7 @@ import { useThreadSelection } from "../../state/use-thread-selection";
 import { vcsEnvironment } from "../../state/vcs";
 import { WorkspaceSidebarToolbar } from "../layout/workspace-sidebar-toolbar";
 import { ThreadGitMenu } from "../threads/ThreadGitControls";
+import { resolveMobileThreadUiPolicy } from "../threads/threadUiPolicy";
 import { useReviewCacheForThread } from "./reviewState";
 import {
   isNativeReviewDiffDrawEvent,
@@ -697,6 +698,7 @@ export function ReviewSheet(props: ReviewSheetProps) {
           ) : null}
           {gitMenuAvailable && selectedThread !== null ? (
             <ThreadGitMenu
+              readOnly={resolveMobileThreadUiPolicy(selectedThread).readOnly}
               environmentId={environmentId}
               threadId={threadId}
               currentBranch={selectedThread.branch ?? null}

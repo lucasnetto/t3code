@@ -23,6 +23,7 @@ import { appAtomRegistry } from "./atom-registry";
 import { setPendingConnectionError } from "./use-remote-environment-registry";
 import { useAtomCommand } from "./use-atom-command";
 import { showGitActionResult } from "./use-vcs-action-state";
+import { isMobileThreadGitMutationAllowed } from "../features/threads/threadUiPolicy";
 import { useThreadSelection } from "./use-thread-selection";
 import { useSelectedThreadWorktree } from "./use-selected-thread-worktree";
 
@@ -133,7 +134,12 @@ export function useSelectedThreadGitActions() {
       }) => Promise<AtomCommandResult<T, E>>,
       options?: { readonly managedExternally?: boolean },
     ): Promise<T | null> => {
-      if (!selectedThread || !selectedThreadProject || !selectedThreadCwd) {
+      if (
+        !selectedThread ||
+        !isMobileThreadGitMutationAllowed(selectedThread) ||
+        !selectedThreadProject ||
+        !selectedThreadCwd
+      ) {
         return null;
       }
 

@@ -628,6 +628,18 @@ export function groupAgentThreadsForSidebarV2<T extends SidebarV2TaskThread>(
   return grouped;
 }
 
+/**
+ * Preserves Sidebar V2's active-first presentation while applying lineage to
+ * the final visible rows. Grouping the partitions independently can separate
+ * a creator and child when one has settled and the other has not.
+ */
+export function orderVisibleSidebarV2Threads<T extends SidebarV2TaskThread>(input: {
+  readonly activeThreads: readonly T[];
+  readonly settledThreads: readonly T[];
+}): T[] {
+  return groupAgentThreadsForSidebarV2([...input.activeThreads, ...input.settledThreads]);
+}
+
 export function resolveThreadStatusPill(input: {
   thread: ThreadStatusInput;
 }): ThreadStatusPill | null {

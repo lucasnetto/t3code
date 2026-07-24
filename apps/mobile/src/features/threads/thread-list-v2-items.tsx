@@ -17,6 +17,7 @@ import { useThemeColor } from "../../lib/useThemeColor";
 import { useThreadPr } from "../../state/use-thread-pr";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
 import { resolveThreadListV2Status, type ThreadListV2Status } from "./threadListV2";
+import { isMobileThreadListMutationAllowed } from "./threadUiPolicy";
 
 /**
  * Thread List v2 rows mirror the web sidebar's compact tonal cards and
@@ -119,6 +120,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const screenColor = useThemeColor("--color-screen");
 
   const status = resolveThreadListV2Status(thread);
+  const mutationsAllowed = isMobileThreadListMutationAllowed(thread);
   const statusLabel = STATUS_LABEL_BY_STATUS[status];
   const timeLabel = threadTimeLabel(thread);
 
@@ -174,14 +176,18 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     thread.title,
   ]);
 
-  const rowContent = (close: () => void) =>
+  const rowContent = (close?: () => void) =>
     variant === "card" ? (
       <Pressable
-        accessibilityHint={`Opens the thread. Swipe left to ${primaryAction.label.toLowerCase()}.`}
+        accessibilityHint={
+          mutationsAllowed
+            ? `Opens the thread. Swipe left to ${primaryAction.label.toLowerCase()}.`
+            : "Opens the thread"
+        }
         accessibilityLabel={thread.title}
         accessibilityRole="button"
         onPress={() => {
-          close();
+          close?.();
           onSelectThread(thread);
         }}
         style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
@@ -255,12 +261,16 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       </Pressable>
     ) : (
       <Pressable
-        accessibilityHint={`Opens the thread. Swipe left to ${primaryAction.label.toLowerCase()}.`}
+        accessibilityHint={
+          mutationsAllowed
+            ? `Opens the thread. Swipe left to ${primaryAction.label.toLowerCase()}.`
+            : "Opens the thread"
+        }
         accessibilityLabel={thread.title}
         accessibilityRole="button"
         className="bg-screen"
         onPress={() => {
-          close();
+          close?.();
           onSelectThread(thread);
         }}
         style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
@@ -290,40 +300,46 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       </Pressable>
     );
 
+  const row = mutationsAllowed ? (
+    <ThreadSwipeable
+      backgroundColor={screenColor}
+      enableTrackpadSwipe
+      // Full swipe commits the advertised lifecycle action (Settle /
+      // Un-settle), never the destructive delete.
+      fullSwipeAction="primary"
+      fullSwipeWidth={windowWidth - 32}
+      onDelete={handleDelete}
+      onSwipeableClose={props.onSwipeableClose}
+      onSwipeableWillOpen={props.onSwipeableWillOpen}
+      primaryAction={primaryAction}
+      resetKey={`${thread.environmentId}:${thread.id}`}
+      simultaneousWithExternalGesture={props.simultaneousSwipeGesture}
+      threadTitle={thread.title}
+    >
+      {(close) => (
+        <ControlPillMenu
+          actions={
+            !props.settlementSupported
+              ? LEGACY_MENU_ACTIONS
+              : canUnsettle
+                ? SLIM_MENU_ACTIONS
+                : CARD_MENU_ACTIONS
+          }
+          onPressAction={handleMenuAction}
+          shouldOpenOnLongPress
+        >
+          {rowContent(close)}
+        </ControlPillMenu>
+      )}
+    </ThreadSwipeable>
+  ) : (
+    rowContent()
+  );
+
   return (
     <>
       {props.showSettledDivider ? <ThreadListV2SettledDivider /> : null}
-      <ThreadSwipeable
-        backgroundColor={screenColor}
-        enableTrackpadSwipe
-        // Full swipe commits the advertised lifecycle action (Settle /
-        // Un-settle), never the destructive delete.
-        fullSwipeAction="primary"
-        fullSwipeWidth={windowWidth - 32}
-        onDelete={handleDelete}
-        onSwipeableClose={props.onSwipeableClose}
-        onSwipeableWillOpen={props.onSwipeableWillOpen}
-        primaryAction={primaryAction}
-        resetKey={`${thread.environmentId}:${thread.id}`}
-        simultaneousWithExternalGesture={props.simultaneousSwipeGesture}
-        threadTitle={thread.title}
-      >
-        {(close) => (
-          <ControlPillMenu
-            actions={
-              !props.settlementSupported
-                ? LEGACY_MENU_ACTIONS
-                : canUnsettle
-                  ? SLIM_MENU_ACTIONS
-                  : CARD_MENU_ACTIONS
-            }
-            onPressAction={handleMenuAction}
-            shouldOpenOnLongPress
-          >
-            {rowContent(close)}
-          </ControlPillMenu>
-        )}
-      </ThreadSwipeable>
+      {row}
     </>
   );
 });

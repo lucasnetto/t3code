@@ -21,6 +21,7 @@ import { useThreadPr, type ThreadPr } from "../../state/use-thread-pr";
 import type { HomeGroupDisplayAction } from "../home/homeListItems";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
 import { resolveThreadStatus } from "./threadPresentation";
+import { isMobileThreadListMutationAllowed } from "./threadUiPolicy";
 
 /**
  * Shared presentation for the thread lists: the compact (phone) Home list and
@@ -457,6 +458,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   );
 
   const backgroundColor = compact ? screenColor : drawerColor;
+  const mutationsAllowed = isMobileThreadListMutationAllowed(thread);
   const effectivePressedBackground = selected ? "rgba(255,255,255,0.16)" : pressedBackgroundColor;
   const effectiveStatus =
     selected && status
@@ -526,15 +528,17 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
       </View>
     ) : null;
 
-  const rowContent = (close: () => void) =>
+  const rowContent = (close?: () => void) =>
     compact ? (
       <Pressable
-        accessibilityHint="Swipe left for archive and delete actions"
+        accessibilityHint={
+          mutationsAllowed ? "Swipe left for archive and delete actions" : "Opens the thread"
+        }
         accessibilityLabel={threadAccessibilityLabel}
         accessibilityRole="button"
         className="bg-screen"
         onPress={() => {
-          close();
+          close?.();
           onSelectThread(thread);
         }}
         style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
@@ -582,7 +586,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
         onHoverIn={() => setHovered(true)}
         onHoverOut={() => setHovered(false)}
         onPress={() => {
-          close();
+          close?.();
           onSelectThread(thread);
         }}
         style={({ pressed }) => ({
@@ -627,6 +631,10 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
         </View>
       </Pressable>
     );
+
+  if (!mutationsAllowed) {
+    return rowContent();
+  }
 
   return (
     <ThreadSwipeable
