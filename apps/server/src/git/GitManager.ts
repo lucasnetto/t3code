@@ -59,6 +59,11 @@ export interface GitActionProgressReporter {
 export interface GitRunStackedActionOptions {
   readonly actionId?: string;
   readonly progressReporter?: GitActionProgressReporter;
+  /**
+   * Runs once, immediately before the action's first remote mutation. Callers
+   * can use this as an optimistic concurrency guard after local preflight.
+   */
+  readonly beforeRemoteMutation?: Effect.Effect<void, GitManagerServiceError>;
 }
 
 export class GitManager extends Context.Service<
@@ -1944,6 +1949,15 @@ export const make = Effect.gen(function* () {
             )
           : { status: "skipped_not_requested" as const };
 
+        let remoteMutationAuthorized = false;
+        const authorizeRemoteMutation = Effect.gen(function* () {
+          if (remoteMutationAuthorized) return;
+          if (options?.beforeRemoteMutation) {
+            yield* options.beforeRemoteMutation;
+          }
+          remoteMutationAuthorized = true;
+        });
+
         const push = wantsPush
           ? yield* progress
               .emit({
@@ -1953,6 +1967,7 @@ export const make = Effect.gen(function* () {
               })
               .pipe(
                 Effect.tap(() => Ref.set(currentPhase, Option.some("push"))),
+                Effect.andThen(authorizeRemoteMutation),
                 Effect.flatMap(() => gitCore.pushCurrentBranch(input.cwd, currentBranch)),
               )
           : { status: "skipped_not_requested" as const };
@@ -1966,6 +1981,7 @@ export const make = Effect.gen(function* () {
               })
               .pipe(
                 Effect.tap(() => Ref.set(currentPhase, Option.some("pr"))),
+                Effect.andThen(authorizeRemoteMutation),
                 Effect.flatMap(() =>
                   runPrStep(modelSelection, input.cwd, currentBranch, progress.emit),
                 ),

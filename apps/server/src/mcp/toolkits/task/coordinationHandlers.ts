@@ -1,10 +1,21 @@
-import { CommandId, MessageId, ThreadId, type OrchestrationCommand } from "@t3tools/contracts";
+import {
+  CommandId,
+  GitManagerError,
+  MessageId,
+  ProjectId,
+  ThreadId,
+  type OrchestrationCommand,
+  type OrchestrationProjectShell,
+  type OrchestrationThreadShell,
+} from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Schema from "effect/Schema";
 
+import * as GitManager from "../../../git/GitManager.ts";
 import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
 import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -20,10 +31,12 @@ import {
   statusForThread,
 } from "./handlers.ts";
 import { TaskCoordinationToolkit } from "./coordinationTools.ts";
+import { TaskToolError } from "./tools.ts";
 
 const DEFAULT_WAIT_MS = 1_000;
 const MAX_WAIT_MS = 10_000;
 const MAX_BASE_REF_PAGE_SIZE = 200;
+const isTaskToolError = Schema.is(TaskToolError);
 
 function titleFromMessage(message: string): string {
   const firstLine = message.split(/\r?\n/, 1)[0]?.trim() || "Task thread";
@@ -80,6 +93,69 @@ const resolveSpawnBaseRef = Effect.fn("TaskCoordinationToolkit.resolveSpawnBaseR
       : `Base ref '${requestedName}' is not an existing local or remote branch.`,
   );
 });
+
+function pullRequestTargetUnavailableDetail(
+  scope: {
+    readonly task: {
+      readonly approvedProjectIds: ReadonlyArray<ProjectId>;
+    };
+    readonly projects: ReadonlyArray<OrchestrationProjectShell>;
+  },
+  target: OrchestrationThreadShell,
+): string | null {
+  if (
+    !scope.task.approvedProjectIds.includes(target.projectId) ||
+    !scope.projects.some((project) => project.id === target.projectId)
+  ) {
+    return `Thread '${target.id}' is not bound to an approved task repository.`;
+  }
+  if (!target.worktreePath) {
+    return `Thread '${target.id}' has no repository checkout.`;
+  }
+  if (target.archivedAt) {
+    return `Thread '${target.id}' is archived.`;
+  }
+  if (
+    target.latestTurn?.state === "running" ||
+    target.session?.status === "starting" ||
+    target.session?.status === "running" ||
+    target.session?.activeTurnId ||
+    target.hasPendingApprovals ||
+    target.hasPendingUserInput
+  ) {
+    return `Thread '${target.id}' is not idle.`;
+  }
+  return null;
+}
+
+function pullRequestTargetIdentity(target: OrchestrationThreadShell) {
+  return {
+    taskId: target.taskContext?.taskId ?? null,
+    projectId: target.projectId,
+    worktreePath: target.worktreePath,
+    branch: target.branch,
+    turnId: target.latestTurn?.turnId ?? null,
+    turnState: target.latestTurn?.state ?? null,
+    sessionStatus: target.session?.status ?? null,
+    sessionTurnId: target.session?.activeTurnId ?? null,
+  };
+}
+
+function pullRequestTargetIdentityMatches(
+  left: ReturnType<typeof pullRequestTargetIdentity>,
+  right: ReturnType<typeof pullRequestTargetIdentity>,
+): boolean {
+  return (
+    left.taskId === right.taskId &&
+    left.projectId === right.projectId &&
+    left.worktreePath === right.worktreePath &&
+    left.branch === right.branch &&
+    left.turnId === right.turnId &&
+    left.turnState === right.turnState &&
+    left.sessionStatus === right.sessionStatus &&
+    left.sessionTurnId === right.sessionTurnId
+  );
+}
 
 const handlers = {
   task_spawn_thread: ({ message, projectId, baseRef }) =>
@@ -411,10 +487,119 @@ const handlers = {
         timedOut: threads.some((thread) => statusForThread(thread) === "working"),
       };
     }),
+  task_create_pull_request: ({ threadId }) =>
+    Effect.gen(function* () {
+      const operation = "task.create_pull_request";
+      const scope = yield* requireTaskScope(operation);
+      const target = yield* requireTaskThread(scope, threadId, operation);
+      const worktreePath = target.worktreePath;
+      if (!worktreePath) {
+        return yield* failTaskTool(
+          operation,
+          `Thread '${threadId}' has no repository checkout.`,
+          "unavailable",
+        );
+      }
+      const unavailableDetail = pullRequestTargetUnavailableDetail(scope, target);
+      if (unavailableDetail) {
+        return yield* failTaskTool(operation, unavailableDetail, "unavailable");
+      }
+      const initialIdentity = pullRequestTargetIdentity(target);
+      const query = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+      const beforeRemoteMutation = Effect.gen(function* () {
+        const snapshot = yield* query
+          .getShellSnapshot()
+          .pipe(
+            Effect.mapError(() =>
+              failTaskTool(operation, "Could not revalidate the pull request target.", "conflict"),
+            ),
+          );
+        const currentTask = snapshot.tasks?.find((candidate) => candidate.id === scope.task.id);
+        const currentTarget = snapshot.threads.find(
+          (candidate) =>
+            candidate.id === threadId && candidate.taskContext?.taskId === scope.task.id,
+        );
+        if (!currentTask || currentTask.status !== "active" || !currentTarget) {
+          return yield* failTaskTool(
+            operation,
+            `Thread '${threadId}' is no longer available in the active task.`,
+            "conflict",
+          );
+        }
+        const currentUnavailableDetail = pullRequestTargetUnavailableDetail(
+          { task: currentTask, projects: snapshot.projects },
+          currentTarget,
+        );
+        if (
+          currentUnavailableDetail ||
+          !pullRequestTargetIdentityMatches(
+            initialIdentity,
+            pullRequestTargetIdentity(currentTarget),
+          )
+        ) {
+          return yield* failTaskTool(
+            operation,
+            `Thread '${threadId}' changed before its pull request workflow could begin.`,
+            "conflict",
+          );
+        }
+      }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new GitManagerError({
+              operation: "task.create_pull_request.revalidate",
+              cwd: worktreePath,
+              detail: cause.detail,
+              cause,
+            }),
+        ),
+      );
+      const crypto = yield* Crypto.Crypto;
+      const uuid = yield* crypto.randomUUIDv4.pipe(
+        Effect.mapError(() => failTaskTool(operation, "Could not allocate an action identifier.")),
+      );
+      const git = yield* GitManager.GitManager;
+      const result = yield* git
+        .runStackedAction(
+          {
+            actionId: `task:pr:${uuid}`,
+            cwd: worktreePath,
+            action: "create_pr",
+          },
+          { beforeRemoteMutation },
+        )
+        .pipe(
+          Effect.mapError((error) => {
+            if (
+              error._tag === "GitManagerError" &&
+              error.cause !== undefined &&
+              isTaskToolError(error.cause)
+            ) {
+              return error.cause;
+            }
+            return failTaskTool(
+              operation,
+              error instanceof Error ? error.message : `Could not create a PR for '${threadId}'.`,
+            );
+          }),
+        );
+      return {
+        threadId,
+        status: result.pr.status,
+        ...(result.pr.url ? { url: result.pr.url } : {}),
+        ...(result.pr.number ? { number: result.pr.number } : {}),
+        ...(result.pr.baseBranch ? { baseBranch: result.pr.baseBranch } : {}),
+        ...(result.pr.headBranch ? { headBranch: result.pr.headBranch } : {}),
+        ...(result.pr.title ? { title: result.pr.title } : {}),
+      };
+    }),
 } satisfies Parameters<typeof TaskCoordinationToolkit.toLayer>[0];
 
 export const TaskCoordinationToolkitHandlersLive = TaskCoordinationToolkit.toLayer(handlers);
 
 export const __testing = {
   titleFromMessage,
+  pullRequestTargetUnavailableDetail,
+  pullRequestTargetIdentity,
+  pullRequestTargetIdentityMatches,
 };

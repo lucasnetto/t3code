@@ -3,6 +3,7 @@ import * as Crypto from "effect/Crypto";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
+import * as GitManager from "../../../git/GitManager.ts";
 import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
 import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -89,8 +90,32 @@ export const TaskWaitForThreadsTool = Tool.make("task_wait_for_threads", {
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, false);
 
+export const TaskCreatePullRequestTool = Tool.make("task_create_pull_request", {
+  description:
+    "Push the selected repository-bound task thread when needed and create or return its current pull request. The thread checkout remains the source of truth.",
+  parameters: Schema.Struct({
+    threadId: ThreadId,
+  }),
+  success: Schema.Struct({
+    threadId: ThreadId,
+    status: Schema.Literals(["created", "opened_existing", "skipped_not_requested"]),
+    url: Schema.optionalKey(Schema.String),
+    number: Schema.optionalKey(NonNegativeInt),
+    baseBranch: Schema.optionalKey(TrimmedNonEmptyString),
+    headBranch: Schema.optionalKey(TrimmedNonEmptyString),
+    title: Schema.optionalKey(TrimmedNonEmptyString),
+  }),
+  failure: TaskToolError,
+  dependencies: [...dependencies, GitManager.GitManager],
+})
+  .annotate(Tool.Title, "Create task thread pull request")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, false);
+
 export const TaskCoordinationToolkit = Toolkit.make(
   TaskSpawnThreadTool,
   TaskSendMessageTool,
   TaskWaitForThreadsTool,
+  TaskCreatePullRequestTool,
 );

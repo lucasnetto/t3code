@@ -17,6 +17,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 export class TaskToolError extends Schema.TaggedErrorClass<TaskToolError>()("TaskToolError", {
   operation: TrimmedNonEmptyString,
   detail: TrimmedNonEmptyString,
+  reason: Schema.optionalKey(Schema.Literals(["unavailable", "conflict"])),
 }) {
   override get message(): string {
     return this.detail;

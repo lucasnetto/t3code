@@ -19,7 +19,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 
-import { GitCommandError, TextGenerationError } from "@t3tools/contracts";
+import { GitCommandError, GitManagerError, TextGenerationError } from "@t3tools/contracts";
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -2017,6 +2017,53 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           call.includes("pr create --base main --head feature/create-pr-only"),
         ),
       ).toBe(true);
+    }),
+  );
+
+  it.effect("runs the remote mutation guard before create_pr pushes", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/guarded-pr"]);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "guarded-pr.txt"), "guarded\n");
+      yield* runGit(repoDir, ["add", "guarded-pr.txt"]);
+      yield* runGit(repoDir, ["commit", "-m", "Guard PR push"]);
+
+      const { manager, ghCalls } = yield* makeManager();
+      let guardCalls = 0;
+      const error = yield* runStackedAction(
+        manager,
+        {
+          cwd: repoDir,
+          action: "create_pr",
+        },
+        {
+          beforeRemoteMutation: Effect.sync(() => {
+            guardCalls += 1;
+          }).pipe(
+            Effect.andThen(
+              Effect.fail(
+                new GitManagerError({
+                  operation: "test.remoteMutationGuard",
+                  cwd: repoDir,
+                  detail: "Target changed.",
+                }),
+              ),
+            ),
+          ),
+        },
+      ).pipe(Effect.flip);
+
+      expect(guardCalls).toBe(1);
+      expect(error).toBeInstanceOf(GitManagerError);
+      expect(
+        yield* runGit(repoDir, ["ls-remote", "--heads", "origin", "feature/guarded-pr"]).pipe(
+          Effect.map((output) => output.stdout.trim()),
+        ),
+      ).toBe("");
+      expect(ghCalls).toEqual([]);
     }),
   );
 
