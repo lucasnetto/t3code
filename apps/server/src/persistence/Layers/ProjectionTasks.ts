@@ -6,7 +6,7 @@ import * as Struct from "effect/Struct";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
-import { toPersistenceSqlError } from "../Errors.ts";
+import { toPersistenceDecodeError, toPersistenceSqlError } from "../Errors.ts";
 import {
   GetProjectionTaskInput,
   ProjectionTask,
@@ -19,6 +19,13 @@ const ProjectionTaskDbRow = ProjectionTask.mapFields(
     approvedProjectIds: Schema.fromJsonString(Schema.Array(ProjectId)),
   }),
 );
+
+function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: string) {
+  return (cause: unknown) =>
+    Schema.isSchemaError(cause)
+      ? toPersistenceDecodeError(decodeOperation)(cause)
+      : toPersistenceSqlError(sqlOperation)(cause);
+}
 
 const makeProjectionTaskRepository = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -109,12 +116,22 @@ const makeProjectionTaskRepository = Effect.gen(function* () {
 
   const getById: ProjectionTaskRepositoryShape["getById"] = (input) =>
     getProjectionTaskRow(input).pipe(
-      Effect.mapError(toPersistenceSqlError("ProjectionTaskRepository.getById:query")),
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionTaskRepository.getById:query",
+          "ProjectionTaskRepository.getById:decodeRow",
+        ),
+      ),
     );
 
   const listAll: ProjectionTaskRepositoryShape["listAll"] = () =>
     listProjectionTaskRows(undefined).pipe(
-      Effect.mapError(toPersistenceSqlError("ProjectionTaskRepository.listAll:query")),
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionTaskRepository.listAll:query",
+          "ProjectionTaskRepository.listAll:decodeRows",
+        ),
+      ),
     );
 
   return {
