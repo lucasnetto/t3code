@@ -47,9 +47,7 @@ export class TaskWorkspaceService extends Context.Service<
 >()("t3/tasks/TaskWorkspaceService") {}
 
 function safeIdSegment(value: string): string {
-  return /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(value)
-    ? value
-    : `id-${Encoding.encodeBase64Url(value)}`;
+  return `id-${Encoding.encodeBase64Url(value)}`;
 }
 
 function slugSegment(value: string): string {

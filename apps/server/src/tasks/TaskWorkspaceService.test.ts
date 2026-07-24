@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { ProjectId, TaskId, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Encoding from "effect/Encoding";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -21,6 +22,83 @@ const layer = it.layer(
 );
 
 layer("TaskWorkspaceService", (it) => {
+  it.effect("keeps generated workspace paths lexically contained", () =>
+    Effect.gen(function* () {
+      const service = yield* TaskWorkspaceService;
+      const path = yield* Path.Path;
+      const config = yield* ServerConfig;
+      const taskRoot = service.newTaskRoot(TaskId.make("../task/outside"));
+      const tasksRoot = path.join(config.worktreesDir, "tasks");
+      const taskRelativePath = path.relative(tasksRoot, taskRoot);
+
+      assert.equal(taskRelativePath.startsWith("..") || path.isAbsolute(taskRelativePath), false);
+
+      const managedWorktreePath = service.managedWorktreePath({
+        taskRoot,
+        threadId: ThreadId.make("../../thread/outside"),
+        projectTitle: "../../../../repository",
+      });
+      const managedRelativePath = path.relative(taskRoot, managedWorktreePath);
+
+      assert.equal(
+        managedRelativePath.startsWith("..") || path.isAbsolute(managedRelativePath),
+        false,
+      );
+      assert.equal(managedRelativePath.startsWith(`worktrees${path.sep}`), true);
+    }),
+  );
+
+  it.effect("encodes every identifier into a distinct path-safe segment", () =>
+    Effect.gen(function* () {
+      const service = yield* TaskWorkspaceService;
+      const path = yield* Path.Path;
+      const config = yield* ServerConfig;
+      const tasksRoot = path.join(config.worktreesDir, "tasks");
+      const identifiers = ["/", "id-Lw", "CON", "NUL", "task.", "thread.."] as const;
+      const taskSegments = identifiers.map(
+        (identifier) =>
+          [
+            identifier,
+            path.relative(tasksRoot, service.newTaskRoot(TaskId.make(identifier))),
+          ] as const,
+      );
+
+      assert.equal(new Set(taskSegments.map(([, segment]) => segment)).size, identifiers.length);
+
+      taskSegments.forEach(([identifier, taskSegment]) => {
+        const expectedSegment = `id-${Encoding.encodeBase64Url(identifier)}`;
+
+        assert.equal(taskSegment, expectedSegment);
+        assert.match(taskSegment, /^id-[A-Za-z0-9_-]+$/);
+        assert.equal(taskSegment.endsWith("."), false);
+      });
+
+      const taskRoot = service.newTaskRoot(TaskId.make("task-1"));
+      const threadPaths = identifiers.map(
+        (identifier) =>
+          [
+            identifier,
+            service.managedWorktreePath({
+              taskRoot,
+              threadId: ThreadId.make(identifier),
+              projectTitle: "Repository",
+            }),
+          ] as const,
+      );
+
+      assert.equal(
+        new Set(threadPaths.map(([, threadPath]) => threadPath)).size,
+        identifiers.length,
+      );
+      threadPaths.forEach(([identifier, threadPath]) => {
+        assert.equal(
+          path.basename(threadPath),
+          `id-${Encoding.encodeBase64Url(identifier)}-repository`,
+        );
+      });
+    }),
+  );
+
   it.effect("creates stable task paths and atomically generated context", () =>
     Effect.gen(function* () {
       const service = yield* TaskWorkspaceService;
@@ -30,14 +108,14 @@ layer("TaskWorkspaceService", (it) => {
       const taskId = TaskId.make("task-1");
       const rootPath = service.newTaskRoot(taskId);
 
-      assert.equal(rootPath, path.join(config.worktreesDir, "tasks", taskId));
+      assert.equal(rootPath, path.join(config.worktreesDir, "tasks", "id-dGFzay0x"));
       assert.equal(
         service.managedWorktreePath({
           taskRoot: rootPath,
           threadId: ThreadId.make("thread-1"),
           projectTitle: "Tubarão API",
         }),
-        path.join(rootPath, "worktrees", "thread-1-tubarao-api"),
+        path.join(rootPath, "worktrees", "id-dGhyZWFkLTE-tubarao-api"),
       );
 
       yield* service.prepare({
