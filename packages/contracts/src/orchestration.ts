@@ -241,11 +241,31 @@ export const OrchestrationTask = Schema.Struct({
   status: OrchestrationTaskStatus,
   rootPath: TrimmedNonEmptyString,
   workspaceProjectId: ProjectId,
-  approvedProjectIds: Schema.Array(ProjectId),
+  approvedProjectIds: Schema.Array(ProjectId).check(Schema.isUnique()),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   completedAt: Schema.NullOr(IsoDateTime),
-});
+}).check(
+  Schema.makeFilter(
+    (task) =>
+      (task.status === "completed") === (task.completedAt !== null) || {
+        path: ["completedAt"],
+        issue:
+          task.status === "completed"
+            ? "completedAt must be set when task status is completed"
+            : "completedAt must be null unless task status is completed",
+      },
+    { identifier: "OrchestrationTaskCompletionState" },
+  ),
+  Schema.makeFilter(
+    (task) =>
+      !task.approvedProjectIds.includes(task.workspaceProjectId) || {
+        path: ["approvedProjectIds"],
+        issue: "approvedProjectIds must not include workspaceProjectId",
+      },
+    { identifier: "OrchestrationTaskApprovedProjects" },
+  ),
+);
 export type OrchestrationTask = typeof OrchestrationTask.Type;
 
 export const ThreadCreatedBy = Schema.Union([

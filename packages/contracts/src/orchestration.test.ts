@@ -496,6 +496,110 @@ it.effect("decodes task state and immutable thread creation lineage", () =>
   }),
 );
 
+it.effect("accepts every consistent task lifecycle state", () =>
+  Effect.gen(function* () {
+    const completedAt = "2026-07-23T13:00:00.000Z";
+    const cases = [
+      { status: "active", completedAt: null },
+      { status: "completing", completedAt: null },
+      { status: "completion-blocked", completedAt: null },
+      { status: "completed", completedAt },
+    ] as const;
+
+    for (const taskState of cases) {
+      const task = yield* decodeOrchestrationTask({
+        id: `task-${taskState.status}`,
+        title: "Coordinate release",
+        status: taskState.status,
+        rootPath: `/tmp/t3/tasks/task-${taskState.status}`,
+        workspaceProjectId: "project-task-1",
+        approvedProjectIds: ["project-api", "project-web"],
+        createdAt: "2026-07-23T12:00:00.000Z",
+        updatedAt: "2026-07-23T12:00:00.000Z",
+        completedAt: taskState.completedAt,
+      });
+
+      assert.strictEqual(task.status, taskState.status);
+      assert.strictEqual(task.completedAt, taskState.completedAt);
+    }
+  }),
+);
+
+it.effect("preserves ordered unique approved projects that exclude the workspace project", () =>
+  Effect.gen(function* () {
+    const task = yield* decodeOrchestrationTask({
+      id: "task-approved-projects",
+      title: "Coordinate release",
+      status: "active",
+      rootPath: "/tmp/t3/tasks/task-approved-projects",
+      workspaceProjectId: "project-task-1",
+      approvedProjectIds: ["project-web", "project-api"],
+      createdAt: "2026-07-23T12:00:00.000Z",
+      updatedAt: "2026-07-23T12:00:00.000Z",
+      completedAt: null,
+    });
+
+    assert.deepStrictEqual(task.approvedProjectIds.map(String), ["project-web", "project-api"]);
+  }),
+);
+
+it.effect("rejects invalid approved project sets", () =>
+  Effect.gen(function* () {
+    const cases = [
+      ["project-api", "project-api"],
+      ["project-api", "project-task-1"],
+    ] as const;
+
+    for (const approvedProjectIds of cases) {
+      const result = yield* Effect.exit(
+        decodeOrchestrationTask({
+          id: "task-invalid-approved-projects",
+          title: "Coordinate release",
+          status: "active",
+          rootPath: "/tmp/t3/tasks/task-invalid-approved-projects",
+          workspaceProjectId: "project-task-1",
+          approvedProjectIds,
+          createdAt: "2026-07-23T12:00:00.000Z",
+          updatedAt: "2026-07-23T12:00:00.000Z",
+          completedAt: null,
+        }),
+      );
+
+      assert.strictEqual(result._tag, "Failure");
+    }
+  }),
+);
+
+it.effect("rejects every contradictory task lifecycle state", () =>
+  Effect.gen(function* () {
+    const completedAt = "2026-07-23T13:00:00.000Z";
+    const cases = [
+      { status: "active", completedAt },
+      { status: "completing", completedAt },
+      { status: "completion-blocked", completedAt },
+      { status: "completed", completedAt: null },
+    ] as const;
+
+    for (const taskState of cases) {
+      const result = yield* Effect.exit(
+        decodeOrchestrationTask({
+          id: `task-${taskState.status}`,
+          title: "Coordinate release",
+          status: taskState.status,
+          rootPath: `/tmp/t3/tasks/task-${taskState.status}`,
+          workspaceProjectId: "project-task-1",
+          approvedProjectIds: ["project-api", "project-web"],
+          createdAt: "2026-07-23T12:00:00.000Z",
+          updatedAt: "2026-07-23T12:00:00.000Z",
+          completedAt: taskState.completedAt,
+        }),
+      );
+
+      assert.strictEqual(result._tag, "Failure");
+    }
+  }),
+);
+
 it.effect("decodes thread archived and unarchived events", () =>
   Effect.gen(function* () {
     const archived = yield* decodeOrchestrationEvent({
