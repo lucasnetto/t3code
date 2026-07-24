@@ -28,6 +28,7 @@ import {
   CheckpointThreadNotFoundError,
   CheckpointTurnRangeUnavailableError,
   CheckpointWorkspacePathMissingError,
+  CheckpointWorkspaceUnavailableError,
 } from "./Errors.ts";
 import type { CheckpointServiceError } from "./Errors.ts";
 import { checkpointRefForThreadTurn } from "./Utils.ts";
@@ -136,6 +137,12 @@ export const make = Effect.gen(function* () {
           threadId: input.threadId,
         });
       }
+      if (!(yield* checkpointStore.isGitRepository(workspaceCwd))) {
+        return yield* new CheckpointWorkspaceUnavailableError({
+          operation,
+          threadId: input.threadId,
+        });
+      }
 
       const fromCheckpointRef =
         input.fromTurnCount === 0
@@ -240,6 +247,12 @@ export const make = Effect.gen(function* () {
     const workspaceCwd = threadContext.value.worktreePath ?? threadContext.value.workspaceRoot;
     if (!workspaceCwd) {
       return yield* new CheckpointWorkspacePathMissingError({
+        operation,
+        threadId: input.threadId,
+      });
+    }
+    if (!(yield* checkpointStore.isGitRepository(workspaceCwd))) {
+      return yield* new CheckpointWorkspaceUnavailableError({
         operation,
         threadId: input.threadId,
       });
