@@ -1,10 +1,22 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
-import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  type OrchestrationThreadShell,
+  ProjectId,
+  ProviderInstanceId,
+  TaskId,
+  type ThreadTaskContext,
+  ThreadId,
+  TurnId,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import { HttpServer } from "effect/unstable/http";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 
 const environmentId = EnvironmentId.make("environment-1");
@@ -19,7 +31,74 @@ const fakeEnvironment = ServerEnvironment.ServerEnvironment.of({
   getDescriptor: Effect.die("unused"),
 });
 
-const makeRegistry = (now: () => number, httpServer = fakeHttpServer) =>
+const makeThreadShell = (
+  threadId: ThreadId,
+  taskContext?: ThreadTaskContext,
+): OrchestrationThreadShell => ({
+  id: threadId,
+  projectId: ProjectId.make("project-task"),
+  title: "Task thread",
+  modelSelection: {
+    instanceId: ProviderInstanceId.make("codex"),
+    model: "gpt-5.6",
+  },
+  runtimeMode: "full-access",
+  interactionMode: "default",
+  branch: null,
+  worktreePath: null,
+  latestTurn: null,
+  createdAt: "2026-07-23T12:00:00.000Z",
+  updatedAt: "2026-07-23T12:00:00.000Z",
+  archivedAt: null,
+  settledOverride: null,
+  settledAt: null,
+  session: null,
+  latestUserMessageAt: null,
+  hasPendingApprovals: false,
+  hasPendingUserInput: false,
+  hasActionableProposedPlan: false,
+  ...(taskContext ? { taskContext } : {}),
+});
+
+const threadQueryLayer = (
+  getThreadShellById: (
+    threadId: ThreadId,
+  ) => Effect.Effect<Option.Option<OrchestrationThreadShell>>,
+) =>
+  Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
+    getThreadShellById,
+  });
+
+const missingThreadQueryLayer = threadQueryLayer(() => Effect.succeed(Option.none()));
+
+const standaloneThreadQueryLayer = threadQueryLayer((threadId) =>
+  Effect.succeed(Option.some(makeThreadShell(threadId))),
+);
+
+const taskThreadQueryLayer = (createdBy: "user" | "agent") =>
+  threadQueryLayer((threadId) =>
+    Effect.succeed(
+      Option.some(
+        makeThreadShell(threadId, {
+          taskId: TaskId.make("task-1"),
+          createdBy:
+            createdBy === "user"
+              ? { kind: "user" }
+              : {
+                  kind: "agent",
+                  threadId: ThreadId.make("thread-parent"),
+                  turnId: TurnId.make("turn-parent"),
+                },
+        }),
+      ),
+    ),
+  );
+
+const makeRegistry = (
+  now: () => number,
+  projectionSnapshotQueryLayer: Layer.Layer<ProjectionSnapshotQuery.ProjectionSnapshotQuery>,
+  httpServer = fakeHttpServer,
+) =>
   McpSessionRegistry.__testing
     .make({
       now,
@@ -27,15 +106,20 @@ const makeRegistry = (now: () => number, httpServer = fakeHttpServer) =>
       maximumLifetimeMs: 1_000,
     })
     .pipe(
-      Effect.provideService(HttpServer.HttpServer, httpServer),
-      Effect.provideService(ServerEnvironment.ServerEnvironment, fakeEnvironment),
-      Effect.provide(NodeServices.layer),
+      Effect.provide(
+        Layer.mergeAll(
+          projectionSnapshotQueryLayer,
+          Layer.succeed(HttpServer.HttpServer, httpServer),
+          Layer.succeed(ServerEnvironment.ServerEnvironment, fakeEnvironment),
+          NodeServices.layer,
+        ),
+      ),
     );
 
 it.effect("stores only a token hash, resolves the bearer token, and revokes by thread", () =>
   Effect.gen(function* () {
     let timestamp = 1_000;
-    const registry = yield* makeRegistry(() => timestamp);
+    const registry = yield* makeRegistry(() => timestamp, missingThreadQueryLayer);
     const threadId = ThreadId.make("thread-1");
     const issued = yield* registry.issue({
       threadId,
@@ -65,7 +149,11 @@ it.effect("builds MCP endpoints from the bound server host", () =>
     ] as const;
 
     for (const [hostname, expectedEndpoint] of cases) {
-      const registry = yield* makeRegistry(() => 1_000, makeFakeHttpServer(hostname));
+      const registry = yield* makeRegistry(
+        () => 1_000,
+        missingThreadQueryLayer,
+        makeFakeHttpServer(hostname),
+      );
       const issued = yield* registry.issue({
         threadId: ThreadId.make(`thread-${hostname}`),
         providerInstanceId: ProviderInstanceId.make("codex"),
@@ -78,7 +166,7 @@ it.effect("builds MCP endpoints from the bound server host", () =>
 it.effect("expires credentials after inactivity", () =>
   Effect.gen(function* () {
     let timestamp = 1_000;
-    const registry = yield* makeRegistry(() => timestamp);
+    const registry = yield* makeRegistry(() => timestamp, missingThreadQueryLayer);
     const issued = yield* registry.issue({
       threadId: ThreadId.make("thread-2"),
       providerInstanceId: ProviderInstanceId.make("claude"),
@@ -87,4 +175,68 @@ it.effect("expires credentials after inactivity", () =>
     timestamp += 101;
     expect(yield* registry.resolve(token)).toBeUndefined();
   }),
+);
+
+it.effect("grants task tools only to user-created task threads", () =>
+  Effect.gen(function* () {
+    const issueCapabilities = (createdBy: "user" | "agent") =>
+      Effect.gen(function* () {
+        const registry = yield* makeRegistry(() => 1_000, taskThreadQueryLayer(createdBy));
+        const issued = yield* registry.issue({
+          threadId: ThreadId.make(`thread-${createdBy}`),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+        });
+        const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
+        return (yield* registry.resolve(token))?.capabilities;
+      });
+
+    expect(Array.from((yield* issueCapabilities("user")) ?? [])).toEqual(["preview", "task"]);
+    expect(Array.from((yield* issueCapabilities("agent")) ?? [])).toEqual(["preview"]);
+  }),
+);
+
+it.effect("uses explicit projection results for standalone and missing threads", () =>
+  Effect.gen(function* () {
+    for (const [threadKind, projectionLayer] of [
+      ["standalone", standaloneThreadQueryLayer],
+      ["missing", missingThreadQueryLayer],
+    ] as const) {
+      const registry = yield* makeRegistry(() => 1_000, projectionLayer);
+      const issued = yield* registry.issue({
+        threadId: ThreadId.make(`thread-${threadKind}`),
+        providerInstanceId: ProviderInstanceId.make("codex"),
+      });
+      const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
+      expect(Array.from((yield* registry.resolve(token))?.capabilities ?? [])).toEqual(["preview"]);
+    }
+  }),
+);
+
+it.effect("constructs the live registry layer with explicit projection authority", () =>
+  Effect.gen(function* () {
+    const registry = yield* McpSessionRegistry.McpSessionRegistry;
+    const issued = yield* registry.issue({
+      threadId: ThreadId.make("thread-live-layer"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+    });
+    const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
+
+    expect(Array.from((yield* registry.resolve(token))?.capabilities ?? [])).toEqual([
+      "preview",
+      "task",
+    ]);
+  }).pipe(
+    Effect.provide(
+      McpSessionRegistry.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            taskThreadQueryLayer("user"),
+            Layer.succeed(HttpServer.HttpServer, fakeHttpServer),
+            Layer.succeed(ServerEnvironment.ServerEnvironment, fakeEnvironment),
+            NodeServices.layer,
+          ),
+        ),
+      ),
+    ),
+  ),
 );

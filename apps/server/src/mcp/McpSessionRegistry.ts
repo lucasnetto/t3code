@@ -4,10 +4,12 @@ import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import { HttpServer } from "effect/unstable/http";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpProviderSession from "./McpProviderSession.ts";
 
@@ -76,6 +78,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
 ) {
   const crypto = yield* Crypto.Crypto;
   const environment = yield* ServerEnvironment.ServerEnvironment;
+  const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const environmentId = yield* environment.getEnvironmentId;
   const httpServer = yield* HttpServer.HttpServer;
   const state = yield* SynchronizedRef.make<RegistryState>({ records: new Map() });
@@ -91,6 +94,23 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
     crypto
       .digest("SHA-256", new TextEncoder().encode(token))
       .pipe(Effect.map(bytesToHex), Effect.orDie);
+
+  const capabilitiesForThread = (threadId: ThreadId) =>
+    projectionSnapshotQuery.getThreadShellById(threadId).pipe(
+      Effect.map((thread) => {
+        const capabilities = new Set<McpInvocationContext.McpCapability>(["preview"]);
+        if (Option.isSome(thread) && thread.value.taskContext?.createdBy.kind === "user") {
+          capabilities.add("task");
+        }
+        return capabilities;
+      }),
+      Effect.catch((cause) =>
+        Effect.logWarning("Failed to resolve MCP task capability", {
+          threadId,
+          cause,
+        }).pipe(Effect.as<ReadonlySet<McpInvocationContext.McpCapability>>(new Set(["preview"]))),
+      ),
+    );
 
   const pruneExpired = (records: ReadonlyMap<string, CredentialRecord>, timestamp: number) => {
     const next = new Map(
@@ -109,12 +129,13 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       const rawToken = yield* crypto.randomBytes(32).pipe(Effect.map(tokenFromBytes), Effect.orDie);
       const tokenHash = yield* hashToken(rawToken);
       const expiresAt = issuedAt + maximumLifetimeMs;
+      const capabilities = yield* capabilitiesForThread(request.threadId);
       const scope: McpInvocationContext.McpInvocationScope = {
         environmentId,
         threadId: ThreadId.make(request.threadId),
         providerSessionId,
         providerInstanceId: ProviderInstanceId.make(request.providerInstanceId),
-        capabilities: new Set(["preview"]),
+        capabilities,
         issuedAt,
         expiresAt,
       };
