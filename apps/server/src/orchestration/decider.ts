@@ -12,6 +12,7 @@ import type * as PlatformError from "effect/PlatformError";
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import {
   listThreadsByProjectId,
+  requireActiveVisibleProject,
   requireActiveTask,
   requireActiveProjectWorkspaceRootAbsent,
   requireProject,
@@ -195,7 +196,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       for (const projectId of approvedProjectIds) {
-        yield* requireVisibleProject({
+        yield* requireActiveVisibleProject({
           readModel,
           command,
           projectId,
@@ -273,7 +274,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         taskId: command.taskId,
       });
-      yield* requireVisibleProject({
+      yield* requireActiveVisibleProject({
         readModel,
         command,
         projectId: command.projectId,
@@ -445,14 +446,25 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           command,
           taskId: command.taskId,
         });
-        if (
-          command.projectId !== task.workspaceProjectId &&
-          !task.approvedProjectIds.includes(command.projectId)
-        ) {
-          return yield* new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: `Project '${command.projectId}' is not approved for task '${command.taskId}'.`,
+        if (command.projectId === task.workspaceProjectId) {
+          if (project.deletedAt !== null) {
+            return yield* new OrchestrationCommandInvariantError({
+              commandType: command.type,
+              detail: `Task workspace project '${project.id}' is deleted.`,
+            });
+          }
+        } else {
+          yield* requireActiveVisibleProject({
+            readModel,
+            command,
+            projectId: command.projectId,
           });
+          if (!task.approvedProjectIds.includes(command.projectId)) {
+            return yield* new OrchestrationCommandInvariantError({
+              commandType: command.type,
+              detail: `Project '${command.projectId}' is not approved for task '${command.taskId}'.`,
+            });
+          }
         }
       }
       return {
@@ -487,7 +499,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.agent.create": {
-      yield* requireProject({
+      const project = yield* requireProject({
         readModel,
         command,
         projectId: command.projectId,
@@ -507,20 +519,67 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.spawningThreadId,
       });
+      if (spawningThread.deletedAt !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Spawning thread '${command.spawningThreadId}' is deleted.`,
+        });
+      }
+      if (spawningThread.archivedAt !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Spawning thread '${command.spawningThreadId}' is archived.`,
+        });
+      }
+      if (spawningThread.settledOverride === "settled" || spawningThread.settledAt !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Spawning thread '${command.spawningThreadId}' is settled.`,
+        });
+      }
       if (spawningThread.taskContext?.taskId !== command.taskId) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `Spawning thread '${command.spawningThreadId}' is outside task '${command.taskId}'.`,
         });
       }
-      if (
-        command.projectId !== task.workspaceProjectId &&
-        !task.approvedProjectIds.includes(command.projectId)
-      ) {
+      if (spawningThread.taskContext.createdBy.kind !== "user") {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Project '${command.projectId}' is not approved for task '${command.taskId}'.`,
+          detail: `Spawning thread '${command.spawningThreadId}' must be user-created.`,
         });
+      }
+      const spawningTurnIsActive =
+        spawningThread.latestTurn?.turnId === command.spawningTurnId &&
+        spawningThread.latestTurn.state === "running" &&
+        spawningThread.session?.threadId === command.spawningThreadId &&
+        spawningThread.session.status === "running" &&
+        spawningThread.session.activeTurnId === command.spawningTurnId;
+      if (!spawningTurnIsActive) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Spawning turn '${command.spawningTurnId}' is not the active turn for thread '${command.spawningThreadId}'.`,
+        });
+      }
+      if (command.projectId === task.workspaceProjectId) {
+        if (project.deletedAt !== null) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Task workspace project '${project.id}' is deleted.`,
+          });
+        }
+      } else {
+        yield* requireActiveVisibleProject({
+          readModel,
+          command,
+          projectId: command.projectId,
+        });
+        if (!task.approvedProjectIds.includes(command.projectId)) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Project '${command.projectId}' is not approved for task '${command.taskId}'.`,
+          });
+        }
       }
       return {
         ...(yield* withEventBase({

@@ -816,7 +816,6 @@ const ThreadSessionStopCommand = Schema.Struct({
 });
 
 const DispatchableClientOrchestrationCommand = Schema.Union([
-  TaskCreateCommand,
   TaskUpdateCommand,
   TaskRepositoryApproveCommand,
   ProjectCreateCommand,
@@ -842,7 +841,6 @@ export type DispatchableClientOrchestrationCommand =
   typeof DispatchableClientOrchestrationCommand.Type;
 
 export const ClientOrchestrationCommand = Schema.Union([
-  TaskCreateCommand,
   TaskUpdateCommand,
   TaskRepositoryApproveCommand,
   ProjectCreateCommand,
@@ -949,6 +947,7 @@ const ThreadRevertCompleteCommand = Schema.Struct({
 });
 
 const InternalOrchestrationCommand = Schema.Union([
+  TaskCreateCommand,
   ThreadAgentCreateCommand,
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,

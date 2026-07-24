@@ -84,6 +84,25 @@ export function requireVisibleProject(input: {
   );
 }
 
+export function requireActiveVisibleProject(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly command: OrchestrationCommand;
+  readonly projectId: ProjectId;
+}): Effect.Effect<OrchestrationProject, OrchestrationCommandInvariantError> {
+  return requireVisibleProject(input).pipe(
+    Effect.flatMap((project) =>
+      project.deletedAt === null
+        ? Effect.succeed(project)
+        : Effect.fail(
+            invariantError(
+              input.command.type,
+              `Project '${input.projectId}' is deleted and cannot handle '${input.command.type}'.`,
+            ),
+          ),
+    ),
+  );
+}
+
 export function requireTask(input: {
   readonly readModel: OrchestrationReadModel;
   readonly command: OrchestrationCommand;
