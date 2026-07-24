@@ -1,0 +1,21 @@
+# Multi-repository task architecture plan
+
+- Added the proposed multi-repository task and durable agent-thread architecture under `docs/architecture/multi-repo-tasks.md`.
+- Defined tasks as stable managed directories with explicit approved repositories, multiple fully interactive user-created threads, and no primary repository or special orchestrator runtime.
+- Kept branch, worktree path, checkpoints, diffs, filesystem revert, source-control actions, and discovered pull-request state on ordinary threads instead of introducing a workstream or PR aggregate.
+- Distinguished immutable user-created and agent-created thread origins. Agent-created threads use the caller-supplied initial message and remain durable and readable, while first-party clients hide their composer and direct mutation controls. Paired clients remain trusted, so this is a UI policy rather than a server authorization boundary.
+- Made repository selection approval-only and deferred worktree creation until a repository-bound thread is created beneath the task directory. Every repository-bound task thread receives its own managed worktree; the task UI never offers the shared current checkout.
+- Kept one durable lifecycle owner per checkout while allowing trusted coordinators and provider-native child agents to inspect or modify nested checkout files whenever the selected provider runtime permissions allow it. V1 adds no task-specific filesystem firewall, lock, or lease.
+- Deferred task-level cross-thread revert and task-root conversation-only revert beyond v1. Existing ordinary repository-thread checkpoint revert remains unchanged.
+- Kept existing branch-based PR discovery without persisting separate task or thread PR metadata.
+- Restricted task tools to user-created threads while keeping ordinary repository/provider tools and provider-native subagents available to agent-created threads.
+- Defined completion to settle every task thread while allowing explicitly retained local-only work without a pushed branch or PR.
+- Kept current non-blocking project setup behavior and made global worktree-root changes apply only to new tasks rather than relocating existing paths.
+- Retained current thread execution and Git services. V1 bootstrap uses best-effort interruption/failure cleanup, preserves truthful durable ownership when cleanup fails, and leaves persistent saga state and process-crash reconciliation to deferred Phase 5.
+- Revised the plan after verifying it against the current implementation: corrected first-turn worktree bootstrap ownership (`dispatchBootstrapTurnStart` in `ws.ts`, not `ProviderCommandReactor`), grounded task roots in the server worktree base directory instead of a nonexistent user setting, and noted that bootstrap compensation currently leaves created worktrees on disk.
+- Specified bounded, re-invocable `task.wait_for_threads`; removed provider-session resumption and other task-level revert work from v1.
+- Removed durable checkout sharing from scope entirely (spawn-time reuse, shared-checkout warnings, shared revert semantics, and sharing indicators), simplifying tools, cleanup, and the sidebar to a one-thread-one-checkout model.
+- Grounded task tools in the existing local MCP server (`/mcp`, per-thread bearer credentials) with a new capability alongside `preview`, noted the Cursor SDK adapter's missing MCP injection, and anchored the `taskThreads` capability on the existing `ExecutionEnvironmentCapabilities` pattern.
+- Scoped previously implicit work: extending the closed orchestration aggregate union for the task kind, a project-visibility marker for the hidden task workspace project, and server-side worktree cleanup machinery distinct from today's client-driven orphan cleanup.
+- Required `task.spawn_thread` to inherit the active caller's provider instance, model selection, runtime mode, and interaction mode, with no v1 child override or silent fallback.
+- Kept v1 path safety deliberately small: server-derived task roots, project-derived repository cwd, normalized persisted paths, and lexical containment for bootstrap cleanup. Stronger canonical and symlink-aware destructive cleanup is deferred to Phase 5.
