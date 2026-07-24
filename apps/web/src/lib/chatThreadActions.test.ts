@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
   resolveThreadActionProjectRef,
   resolveNewDraftStartFromOrigin,
+  resolveTaskRepositoryDraftStartFromOrigin,
   startNewLocalThreadFromContext,
   startNewThreadFromContext,
   startNewThreadInProjectFromContext,
@@ -11,6 +12,7 @@ import {
 } from "./chatThreadActions";
 
 const ENVIRONMENT_ID = EnvironmentId.make("environment-1");
+const OTHER_ENVIRONMENT_ID = EnvironmentId.make("environment-2");
 const PROJECT_ID = ProjectId.make("project-1");
 const FALLBACK_PROJECT_ID = ProjectId.make("project-2");
 
@@ -36,6 +38,46 @@ describe("chatThreadActions", () => {
       resolveNewDraftStartFromOrigin({
         envMode: "local",
         newWorktreesStartFromOrigin: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("uses the task environment setting for repository task drafts", () => {
+    expect(
+      resolveTaskRepositoryDraftStartFromOrigin({
+        hasTargetProject: true,
+        taskEnvironmentId: ENVIRONMENT_ID,
+        serverConfigs: new Map([
+          [ENVIRONMENT_ID, { settings: { newWorktreesStartFromOrigin: true } }],
+          [OTHER_ENVIRONMENT_ID, { settings: { newWorktreesStartFromOrigin: false } }],
+        ]),
+      }),
+    ).toBe(true);
+    expect(
+      resolveTaskRepositoryDraftStartFromOrigin({
+        hasTargetProject: true,
+        taskEnvironmentId: OTHER_ENVIRONMENT_ID,
+        serverConfigs: new Map([
+          [ENVIRONMENT_ID, { settings: { newWorktreesStartFromOrigin: true } }],
+          [OTHER_ENVIRONMENT_ID, { settings: { newWorktreesStartFromOrigin: false } }],
+        ]),
+      }),
+    ).toBe(false);
+  });
+
+  it("falls back safely when the task environment config is not loaded", () => {
+    expect(
+      resolveTaskRepositoryDraftStartFromOrigin({
+        hasTargetProject: true,
+        taskEnvironmentId: ENVIRONMENT_ID,
+        serverConfigs: new Map(),
+      }),
+    ).toBe(true);
+    expect(
+      resolveTaskRepositoryDraftStartFromOrigin({
+        hasTargetProject: false,
+        taskEnvironmentId: ENVIRONMENT_ID,
+        serverConfigs: new Map(),
       }),
     ).toBe(false);
   });

@@ -10,15 +10,20 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 
 import type { Thread } from "../types";
+import type { DraftThreadState } from "../composerDraftStore";
 import {
   MAX_HIDDEN_MOUNTED_PREVIEW_THREADS,
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
+  buildDraftWorktreeBootstrap,
   buildExpiredTerminalContextToastCopy,
   buildThreadTurnInterruptInput,
+  canChangeDraftEnvironment,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
   deriveRepositoryUiContext,
   taskDraftRepositorySendBlockReason,
+  durableThreadMatchesTaskRepositoryDraft,
+  enforceTaskDraftEnvMode,
   getStartedThreadModelChangeBlockReason,
   hasServerAcknowledgedLocalDispatch,
   isAgentCreatedTaskThread,
@@ -26,7 +31,9 @@ import {
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
   resolveThreadUiReadOnlyReason,
+  resolveDraftSendProjectRef,
   resolveSendEnvMode,
+  shouldIncludeDraftThreadBootstrap,
   shouldWriteThreadErrorToCurrentServerThread,
   threadHasStarted,
 } from "./ChatView.logic";
@@ -529,6 +536,219 @@ describe("resolveSendEnvMode", () => {
   it("keeps worktree mode only for git repositories", () => {
     expect(resolveSendEnvMode({ requestedEnvMode: "worktree", isGitRepo: true })).toBe("worktree");
     expect(resolveSendEnvMode({ requestedEnvMode: "worktree", isGitRepo: false })).toBe("local");
+  });
+});
+
+describe("enforceTaskDraftEnvMode", () => {
+  it("forces repository-bound task drafts into managed worktree mode", () => {
+    expect(
+      enforceTaskDraftEnvMode({
+        requestedEnvMode: "local",
+        isTaskRepositoryDraft: true,
+      }),
+    ).toBe("worktree");
+  });
+
+  it("leaves ordinary drafts unchanged", () => {
+    expect(
+      enforceTaskDraftEnvMode({
+        requestedEnvMode: "local",
+        isTaskRepositoryDraft: false,
+      }),
+    ).toBe("local");
+  });
+});
+
+describe("task repository draft environment lock", () => {
+  it("rejects direct or shortcut environment changes for repository-bound task drafts", () => {
+    expect(
+      canChangeDraftEnvironment({
+        hasDraftId: true,
+        environmentLocked: false,
+        isTaskRepositoryDraft: true,
+      }),
+    ).toBe(false);
+    expect(
+      canChangeDraftEnvironment({
+        hasDraftId: true,
+        environmentLocked: false,
+        isTaskRepositoryDraft: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("routes first send through the task environment and target repository", () => {
+    const taskEnvironmentId = EnvironmentId.make("environment-task");
+    const staleEnvironmentId = EnvironmentId.make("environment-stale");
+    const repositoryProjectId = ProjectId.make("project-repository");
+    const draftThread: DraftThreadState = {
+      threadId,
+      environmentId: staleEnvironmentId,
+      projectId,
+      logicalProjectKey: "task-thread-draft:send",
+      createdAt: now,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: "main",
+      worktreePath: null,
+      envMode: "worktree",
+      startFromOrigin: false,
+      taskDraft: {
+        taskId: TaskId.make("task-send"),
+        title: "Send safely",
+        workspaceProjectId: ProjectId.make("project-task-workspace"),
+        approvedProjectIds: [repositoryProjectId],
+        createTask: false,
+        targetProjectId: repositoryProjectId,
+        taskEnvironmentId,
+      },
+      promotedTo: null,
+    };
+
+    expect(
+      resolveDraftSendProjectRef({
+        draftThread,
+        environmentId: staleEnvironmentId,
+        projectId,
+      }),
+    ).toEqual({
+      environmentId: taskEnvironmentId,
+      projectId: repositoryProjectId,
+    });
+  });
+});
+
+describe("durableThreadMatchesTaskRepositoryDraft", () => {
+  const taskId = TaskId.make("task-retry");
+  const repositoryProjectId = ProjectId.make("project-repository");
+  const draftThread: DraftThreadState = {
+    threadId: ThreadId.make("thread-reserved"),
+    environmentId,
+    projectId: repositoryProjectId,
+    logicalProjectKey: "task-thread-draft:task-retry",
+    createdAt: now,
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: "main",
+    worktreePath: null,
+    envMode: "worktree",
+    startFromOrigin: false,
+    taskDraft: {
+      taskId,
+      title: "Retry task",
+      workspaceProjectId: ProjectId.make("project-task-workspace"),
+      approvedProjectIds: [repositoryProjectId],
+      createTask: false,
+      targetProjectId: repositoryProjectId,
+    },
+    promotedTo: null,
+  };
+
+  it("reuses only the exact durable user thread reserved by the task draft", () => {
+    expect(
+      durableThreadMatchesTaskRepositoryDraft(draftThread, {
+        projectId: repositoryProjectId,
+        createdAt: now,
+        archivedAt: null,
+        taskContext: { taskId, createdBy: { kind: "user" } },
+      }),
+    ).toBe(true);
+    expect(
+      durableThreadMatchesTaskRepositoryDraft(draftThread, {
+        projectId: ProjectId.make("project-other"),
+        createdAt: now,
+        archivedAt: null,
+        taskContext: { taskId, createdBy: { kind: "user" } },
+      }),
+    ).toBe(false);
+    expect(
+      durableThreadMatchesTaskRepositoryDraft(draftThread, {
+        projectId: repositoryProjectId,
+        createdAt: now,
+        archivedAt: null,
+        taskContext: {
+          taskId,
+          createdBy: { kind: "agent" },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      durableThreadMatchesTaskRepositoryDraft(draftThread, {
+        projectId: repositoryProjectId,
+        createdAt: now,
+        archivedAt: "2026-03-30T00:00:00.000Z",
+        taskContext: { taskId, createdBy: { kind: "user" } },
+      }),
+    ).toBe(false);
+    expect(durableThreadMatchesTaskRepositoryDraft(draftThread, null)).toBe(false);
+  });
+});
+
+describe("shouldIncludeDraftThreadBootstrap", () => {
+  it("replays task bootstrap metadata for a durable empty thread after first-send failure", () => {
+    expect(
+      shouldIncludeDraftThreadBootstrap({
+        isLocalDraftThread: false,
+        hasTaskDraft: true,
+        isFirstMessage: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not recreate ordinary server threads or started task threads", () => {
+    expect(
+      shouldIncludeDraftThreadBootstrap({
+        isLocalDraftThread: false,
+        hasTaskDraft: false,
+        isFirstMessage: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldIncludeDraftThreadBootstrap({
+        isLocalDraftThread: false,
+        hasTaskDraft: true,
+        isFirstMessage: false,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("buildDraftWorktreeBootstrap", () => {
+  it("preserves the selected branch while requesting its origin commit", () => {
+    expect(
+      buildDraftWorktreeBootstrap({
+        projectCwd: "/repos/t3code",
+        baseBranch: "feature/task-drafts",
+        branch: "t3code/thread-1",
+        startFromOrigin: true,
+      }),
+    ).toEqual({
+      prepareWorktree: {
+        projectCwd: "/repos/t3code",
+        baseBranch: "feature/task-drafts",
+        branch: "t3code/thread-1",
+        startFromOrigin: true,
+      },
+      runSetupScript: true,
+    });
+  });
+
+  it("keeps local branch semantics when start-from-origin is disabled", () => {
+    expect(
+      buildDraftWorktreeBootstrap({
+        projectCwd: "/repos/t3code",
+        baseBranch: "main",
+        branch: "t3code/thread-2",
+        startFromOrigin: false,
+      }),
+    ).toEqual({
+      prepareWorktree: {
+        projectCwd: "/repos/t3code",
+        baseBranch: "main",
+        branch: "t3code/thread-2",
+      },
+      runSetupScript: true,
+    });
   });
 });
 

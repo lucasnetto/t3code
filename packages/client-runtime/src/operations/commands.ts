@@ -31,7 +31,6 @@ type CommandInput<T extends CommandType> = Omit<
 export type CreateProjectInput = CommandInput<"project.create">;
 export type UpdateProjectInput = CommandInput<"project.meta.update">;
 export type DeleteProjectInput = CommandInput<"project.delete">;
-export type CreateTaskInput = CommandInput<"task.create">;
 export type UpdateTaskInput = Omit<CommandInput<"task.update">, "updatedAt"> & {
   readonly updatedAt?: string;
 };
@@ -120,18 +119,6 @@ export const deleteProject: (input: DeleteProjectInput) => CommandEffect = Effec
     ...input,
     type: "project.delete",
     commandId: yield* commandId(input),
-  });
-});
-
-export const createTask: (input: CreateTaskInput) => CommandEffect = Effect.fn(
-  "EnvironmentCommands.createTask",
-)(function* (input) {
-  const metadata = yield* timestampedCommandMetadata(input);
-  return yield* dispatch({
-    ...input,
-    type: "task.create",
-    commandId: metadata.commandId,
-    createdAt: metadata.createdAt,
   });
 });
 

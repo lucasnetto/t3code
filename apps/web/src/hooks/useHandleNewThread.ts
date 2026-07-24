@@ -3,7 +3,7 @@ import {
   scopeProjectRef,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
-import type { EnvironmentTask } from "@t3tools/client-runtime/state/models";
+import type { EnvironmentProject, EnvironmentTask } from "@t3tools/client-runtime/state/models";
 import {
   DEFAULT_RUNTIME_MODE,
   DEFAULT_SERVER_SETTINGS,
@@ -25,7 +25,10 @@ import {
   selectProjectGroupingSettings,
 } from "../logicalProject";
 import { readThreadShell, useProjects, useServerConfigs, useThread } from "../state/entities";
-import { resolveNewDraftStartFromOrigin } from "../lib/chatThreadActions";
+import {
+  resolveNewDraftStartFromOrigin,
+  resolveTaskRepositoryDraftStartFromOrigin,
+} from "../lib/chatThreadActions";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
 import { useClientSettings } from "./useSettings";
@@ -239,26 +242,34 @@ export function useNewTaskHandler() {
 
 export function useNewTaskThreadHandler() {
   const router = useRouter();
+  const serverConfigs = useServerConfigs();
 
   return useCallback(
-    async (task: EnvironmentTask): Promise<void> => {
+    async (task: EnvironmentTask, targetProject?: EnvironmentProject): Promise<void> => {
       const draftId = newDraftId();
       const threadId = newThreadId();
       const createdAt = new Date().toISOString();
-      const taskWorkspaceRef = scopeProjectRef(task.environmentId, task.workspaceProjectId);
+      const targetProjectRef = scopeProjectRef(
+        task.environmentId,
+        targetProject?.id ?? task.workspaceProjectId,
+      );
       const { applyStickyState, setLogicalProjectDraftThreadId } = useComposerDraftStore.getState();
 
       setLogicalProjectDraftThreadId(
         `task-thread-draft:${task.id}:${draftId}`,
-        taskWorkspaceRef,
+        targetProjectRef,
         draftId,
         {
           threadId,
           createdAt,
           branch: null,
           worktreePath: null,
-          envMode: "local",
-          startFromOrigin: false,
+          envMode: targetProject ? "worktree" : "local",
+          startFromOrigin: resolveTaskRepositoryDraftStartFromOrigin({
+            hasTargetProject: targetProject !== undefined,
+            taskEnvironmentId: task.environmentId,
+            serverConfigs,
+          }),
           runtimeMode: DEFAULT_RUNTIME_MODE,
           taskDraft: {
             taskId: task.id,
@@ -266,6 +277,8 @@ export function useNewTaskThreadHandler() {
             workspaceProjectId: task.workspaceProjectId,
             approvedProjectIds: task.approvedProjectIds,
             createTask: false,
+            taskEnvironmentId: task.environmentId,
+            ...(targetProject ? { targetProjectId: targetProject.id } : {}),
           },
         },
       );
@@ -276,7 +289,7 @@ export function useNewTaskThreadHandler() {
         params: { draftId },
       });
     },
-    [router],
+    [router, serverConfigs],
   );
 }
 

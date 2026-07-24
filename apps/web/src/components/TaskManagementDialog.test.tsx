@@ -162,6 +162,7 @@ const defaultProps = {
   onUpdateTitle: vi.fn(async () => {}),
   onApproveProject: vi.fn(async () => {}),
   onCreateThread: vi.fn(async () => {}),
+  onCreateRepositoryThread: vi.fn(async () => {}),
 };
 
 function render(
@@ -206,6 +207,7 @@ describe("TaskManagementDialog", () => {
     defaultProps.onUpdateTitle.mockReset();
     defaultProps.onApproveProject.mockReset();
     defaultProps.onCreateThread.mockReset();
+    defaultProps.onCreateRepositoryThread.mockReset();
   });
 
   it("keeps repository approval pending once and surfaces a retryable failure", async () => {
@@ -430,5 +432,31 @@ describe("TaskManagementDialog", () => {
 
     expect(defaultProps.onCreateThread).toHaveBeenCalledTimes(2);
     expect(defaultProps.onOpenChange).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it("keeps repository thread creation pending once and leaves the dialog open on failure", async () => {
+    const creation = deferred<void>();
+    defaultProps.onCreateRepositoryThread.mockReturnValue(creation.promise);
+
+    const createButton = byAriaLabel(render(), "New thread in Approved repository");
+    (createButton.props as { readonly onClick: () => void }).onClick();
+    (createButton.props as { readonly onClick: () => void }).onClick();
+
+    expect(defaultProps.onCreateRepositoryThread).toHaveBeenCalledExactlyOnceWith(projects[0]);
+    expect(textContent(byAriaLabel(render(), "New thread in Approved repository"))).toBe(
+      "Creating…",
+    );
+
+    creation.reject(new Error("Repository draft navigation failed."));
+    await flushPromises();
+
+    expect(defaultProps.onOpenChange).not.toHaveBeenCalled();
+    expect(
+      render().some(
+        (element) =>
+          (element.props as { readonly role?: string }).role === "alert" &&
+          textContent(element) === "Repository draft navigation failed.",
+      ),
+    ).toBe(true);
   });
 });

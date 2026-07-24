@@ -42,6 +42,7 @@ export function TaskManagementDialog({
   onUpdateTitle,
   onApproveProject,
   onCreateThread,
+  onCreateRepositoryThread,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -50,6 +51,7 @@ export function TaskManagementDialog({
   onUpdateTitle: (title: string) => Promise<void>;
   onApproveProject: (project: EnvironmentProject) => Promise<void>;
   onCreateThread: () => Promise<void>;
+  onCreateRepositoryThread: (project: EnvironmentProject) => Promise<void>;
 }) {
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const pendingActionRef = useRef<string | null>(null);
@@ -153,6 +155,17 @@ export function TaskManagementDialog({
     }
   };
 
+  const createRepositoryThread = async (project: EnvironmentProject) => {
+    const didCreate = await runAction(
+      `create-repository-thread:${project.id}`,
+      () => onCreateRepositoryThread(project),
+      `Thread draft created for ${project.title}.`,
+    );
+    if (didCreate) {
+      onOpenChange(false);
+    }
+  };
+
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => !isBusy && onOpenChange(nextOpen)}>
       <DialogPopup className="max-w-xl">
@@ -217,12 +230,25 @@ export function TaskManagementDialog({
                   className="flex items-center gap-3 rounded-lg border border-border px-3 py-2.5"
                 >
                   <FolderGit2Icon className="size-4 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0">
+                  <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium">{project.title}</span>
                     <span className="block truncate text-[11px] text-muted-foreground">
                       {project.workspaceRoot}
                     </span>
                   </span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={!taskIsActive || isBusy || project.repositoryIdentity === null}
+                    aria-label={`New thread in ${project.title}`}
+                    onClick={() => void createRepositoryThread(project)}
+                  >
+                    {project.repositoryIdentity === null
+                      ? "Not a Git repository"
+                      : pendingAction === `create-repository-thread:${project.id}`
+                        ? "Creating…"
+                        : "New thread"}
+                  </Button>
                 </div>
               ))}
             </div>
